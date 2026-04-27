@@ -403,6 +403,21 @@ impl ObjectImpl for WrenWindow {
             }
         ));
 
+        // Auto-collapse sidebar on narrow windows
+        let bp = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            700.0,
+            adw::LengthUnit::Sp,
+        ));
+        bp.add_setter(&*obj.imp().split_view, "collapsed", Some(&true.to_value()));
+        obj.add_breakpoint(bp);
+
+        obj.imp().split_view.connect_collapsed_notify(move |sv| {
+            if sv.is_collapsed() {
+                sv.set_show_sidebar(false);
+            }
+        });
+
         // Mouse back/forward button navigation (buttons 8 and 9)
         let mouse_nav = gtk4::GestureClick::new();
         mouse_nav.set_button(0);
