@@ -1696,10 +1696,14 @@ impl WrenWindow {
     }
 }
 
-// ── Recursive file operation helpers ────────────────────────────────────────
+// ── Iterative file operation helpers ────────────────────────────────────────
+//
+// Iterative (non-recursive) implementations avoid the Box::pin overhead and
+// potential stack issues with deeply-nested directory trees.
 
 async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Error> {
-    let info = src
+    // Check whether the top-level source is a directory.
+    let src_info = src
         .query_info_future(
             "standard::type",
             gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
@@ -1707,10 +1711,18 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
         )
         .await?;
 
-    if info.file_type() == gio::FileType::Directory {
-        dest.make_directory_future(glib::Priority::DEFAULT).await?;
+    if src_info.file_type() != gio::FileType::Directory {
+        let (fut, _) = src.copy_future(&dest, gio::FileCopyFlags::NONE, glib::Priority::DEFAULT);
+        return fut.await;
+    }
 
-        let enumerator = src
+    // BFS queue of (src_dir, dest_dir) pairs.
+    dest.make_directory_future(glib::Priority::DEFAULT).await?;
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((src, dest));
+
+    while let Some((src_dir, dest_dir)) = queue.pop_front() {
+        let enumerator = src_dir
             .enumerate_children_future(
                 "standard::name,standard::type",
                 gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
@@ -1719,22 +1731,29 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
             .await?;
 
         loop {
-            let children = enumerator
+            let batch = enumerator
                 .next_files_future(30, glib::Priority::DEFAULT)
                 .await?;
-            if children.is_empty() {
+            if batch.is_empty() {
                 break;
             }
-            for child_info in children {
+            for child_info in batch {
                 let name = child_info.name();
-                let child_src = src.child(&name);
-                let child_dest = dest.child(&name);
-                Box::pin(copy_recursive(child_src, child_dest)).await?;
+                let child_src = src_dir.child(&name);
+                let child_dest = dest_dir.child(&name);
+                if child_info.file_type() == gio::FileType::Directory {
+                    child_dest.make_directory_future(glib::Priority::DEFAULT).await?;
+                    queue.push_back((child_src, child_dest));
+                } else {
+                    let (fut, _) = child_src.copy_future(
+                        &child_dest,
+                        gio::FileCopyFlags::NONE,
+                        glib::Priority::DEFAULT,
+                    );
+                    fut.await?;
+                }
             }
         }
-    } else {
-        let (fut, _) = src.copy_future(&dest, gio::FileCopyFlags::NONE, glib::Priority::DEFAULT);
-        fut.await?;
     }
     Ok(())
 }
@@ -1748,8 +1767,17 @@ async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
         )
         .await?;
 
-    if info.file_type() == gio::FileType::Directory {
-        let enumerator = file
+    if info.file_type() != gio::FileType::Directory {
+        return file.delete_future(glib::Priority::DEFAULT).await;
+    }
+
+    // DFS: collect directories in traversal order, delete all files immediately.
+    // Directories are deleted in reverse traversal order (deepest first).
+    let mut dirs: Vec<gio::File> = Vec::new();
+    let mut stack = vec![file];
+
+    while let Some(dir) = stack.pop() {
+        let enumerator = dir
             .enumerate_children_future(
                 "standard::name,standard::type",
                 gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
@@ -1757,21 +1785,30 @@ async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
             )
             .await?;
 
+        dirs.push(dir.clone());
+
         loop {
-            let children = enumerator
+            let batch = enumerator
                 .next_files_future(30, glib::Priority::DEFAULT)
                 .await?;
-            if children.is_empty() {
+            if batch.is_empty() {
                 break;
             }
-            for child_info in children {
-                let child = file.child(child_info.name());
-                Box::pin(delete_recursive(child)).await?;
+            for child_info in batch {
+                let child = dir.child(child_info.name());
+                if child_info.file_type() == gio::FileType::Directory {
+                    stack.push(child);
+                } else {
+                    child.delete_future(glib::Priority::DEFAULT).await?;
+                }
             }
         }
     }
 
-    file.delete_future(glib::Priority::DEFAULT).await?;
+    // Delete directories deepest-first.
+    for dir in dirs.into_iter().rev() {
+        dir.delete_future(glib::Priority::DEFAULT).await?;
+    }
     Ok(())
 }
 
