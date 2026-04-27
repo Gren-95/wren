@@ -1053,17 +1053,38 @@ impl WrenWindow {
         };
         let Some(dest_dir) = dest_dir else { return };
 
-        let Some(name) = file.basename() else { return };
         let Some(target_path) = file.path() else {
             self.show_toast("Cannot create link: not a local file");
             return;
         };
+        // Explicitly require a local dest dir; unwrap_or_default() would give an
+        // empty PathBuf and create the symlink in the process working directory.
+        let Some(dest_dir_path) = dest_dir.path() else {
+            self.show_toast("Cannot create link: current directory is not local");
+            return;
+        };
+        let Some(name) = file.basename() else { return };
 
-        let link_name = format!("{} (Link)", name.to_string_lossy());
+        // Place "(link)" before the extension: "photo (link).jpg" not "photo.jpg (link)"
+        let stem = name.file_stem().and_then(|s| s.to_str()).unwrap_or("link");
+        let ext  = name.extension().and_then(|s| s.to_str());
+
+        let make_name = |suffix: &str| match ext {
+            Some(e) => format!("{stem}{suffix}.{e}"),
+            None    => format!("{stem}{suffix}"),
+        };
+
+        // Find a non-colliding link path
         let link_path = {
-            let mut p = dest_dir.path().unwrap_or_default();
-            p.push(&link_name);
-            p
+            let first = dest_dir_path.join(make_name(" (link)"));
+            if !first.exists() {
+                first
+            } else {
+                (2u32..).find_map(|i| {
+                    let p = dest_dir_path.join(make_name(&format!(" (link {i})")));
+                    (!p.exists()).then_some(p)
+                }).expect("will eventually find a free name")
+            }
         };
 
         match std::os::unix::fs::symlink(&target_path, &link_path) {
