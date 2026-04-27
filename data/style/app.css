@@ -1,0 +1,104 @@
+/* ── File grid cells ─────────────────────────────────────────────────────── */
+
+.wren-file-cell {
+  border-radius: 8px;
+  padding: 4px;
+  /* GPU-friendly transition: background-color is a simple color blend, not
+     an offscreen composite — the GSK GL renderer handles it in one pass. */
+  transition: background-color 120ms ease;
+}
+
+.wren-file-cell:hover {
+  background-color: alpha(@accent_color, 0.08);
+}
+
+.wren-file-cell:selected {
+  background-color: alpha(@accent_color, 0.2);
+}
+
+.wren-file-cell label {
+  font-size: 0.85em;
+}
+
+/* ── Breadcrumb path row container ──────────────────────────────────────── */
+
+.wren-path-row {
+  margin: 3px 4px;
+}
+
+/* Make the scrolled window and its viewport transparent so the
+   crumb-box background shows through cleanly */
+.wren-crumb-scroll,
+.wren-crumb-scroll > viewport {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* Pill-shaped container for the crumbs */
+.wren-crumb-box {
+  background: alpha(currentColor, 0.07);
+  border-radius: 9999px;
+  padding: 2px 6px;
+}
+
+/* Ancestor segment buttons */
+button.wren-breadcrumb {
+  padding: 1px 7px;
+  border-radius: 9999px;
+  min-height: 0;
+  min-width: 0;
+  font-size: 0.9em;
+  transition: background-color 100ms ease;
+}
+
+button.wren-breadcrumb:hover {
+  background-color: alpha(currentColor, 0.12);
+}
+
+/* Chevron separators between crumbs */
+image.wren-crumb-sep {
+  color: alpha(currentColor, 0.4);
+  margin: 0 -1px;
+}
+
+/* Current directory (last crumb, not a button) */
+label.wren-current-dir {
+  font-weight: 600;
+  padding: 1px 7px;
+  font-size: 0.9em;
+}
+
+/* Edit-location pencil button at the right end of the crumb row.
+   Using color-based dimming instead of the `opacity` property avoids
+   promoting the button to its own offscreen render layer — `opacity < 1`
+   on a widget forces GSK to composite it separately on every frame. */
+.wren-edit-location-btn {
+  padding: 2px 4px;
+  min-height: 0;
+  min-width: 0;
+  color: alpha(currentColor, 0.5);
+  transition: color 100ms ease;
+}
+
+.wren-edit-location-btn:hover {
+  color: currentColor;
+}
+
+/* Path entry shown when Ctrl+L is pressed */
+.wren-path-entry {
+  border-radius: 9999px;
+  min-height: 0;
+  padding: 2px 6px;
+}
+
+/* ── List view rows ──────────────────────────────────────────────────────── */
+
+listview > row {
+  padding: 0;
+  transition: background-color 80ms ease;
+}
+
+listview > row:selected {
+  background-color: alpha(@accent_color, 0.15);
+}

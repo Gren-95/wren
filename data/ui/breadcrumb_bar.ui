@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <template class="WrenBreadcrumbBar" parent="GtkWidget">
+    <child>
+      <object class="GtkBox">
+        <property name="orientation">horizontal</property>
+        <property name="hexpand">true</property>
+        <property name="spacing">4</property>
+        <property name="valign">center</property>
+        <style>
+          <class name="wren-path-row"/>
+        </style>
+        <child>
+          <object class="GtkStack" id="mode_stack">
+            <property name="hexpand">true</property>
+            <property name="transition-type">none</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">crumbs</property>
+                <property name="child">
+                  <object class="GtkScrolledWindow">
+                    <property name="hscrollbar-policy">external</property>
+                    <property name="vscrollbar-policy">never</property>
+                    <property name="hexpand">true</property>
+                    <property name="propagate-natural-width">true</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="wren-crumb-scroll"/>
+                    </style>
+                    <child>
+                      <object class="GtkBox" id="crumb_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">0</property>
+                        <property name="valign">center</property>
+                        <style>
+                          <class name="wren-crumb-box"/>
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">entry</property>
+                <property name="child">
+                  <object class="GtkEntry" id="path_entry">
+                    <property name="hexpand">true</property>
+                    <property name="placeholder-text">Enter path…</property>
+                    <style>
+                      <class name="wren-path-entry"/>
+                    </style>
+                  </object>
+                </property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkButton" id="edit_button">
+            <property name="icon-name">document-edit-symbolic</property>
+            <property name="tooltip-text">Edit Location (Ctrl+L)</property>
+            <property name="valign">center</property>
+            <style>
+              <class name="flat"/>
+              <class name="wren-edit-location-btn"/>
+            </style>
+          </object>
+        </child>
+      </object>
+    </child>
+  </template>
+</interface>

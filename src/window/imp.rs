@@ -1,0 +1,331 @@
+use std::cell::{Cell, RefCell};
+
+use adw::prelude::*;
+use adw::subclass::prelude::*;
+use glib::subclass::InitializingObject;
+use gtk4::{CompositeTemplate, TemplateChild};
+
+use crate::breadcrumb::WrenBreadcrumbBar;
+use crate::sidebar::WrenSidebar;
+use crate::window::tab::TabState;
+use crate::window::undo::UndoOp;
+
+#[derive(Debug, Default, CompositeTemplate)]
+#[template(resource = "/io/github/wren/ui/window.ui")]
+pub struct WrenWindow {
+    #[template_child]
+    pub header_bar: TemplateChild<adw::HeaderBar>,
+    #[template_child]
+    pub back_button: TemplateChild<gtk4::Button>,
+    #[template_child]
+    pub forward_button: TemplateChild<gtk4::Button>,
+    #[template_child]
+    pub split_view: TemplateChild<adw::OverlaySplitView>,
+    #[template_child]
+    pub toast_overlay: TemplateChild<adw::ToastOverlay>,
+    #[template_child]
+    pub search_bar: TemplateChild<gtk4::SearchBar>,
+    #[template_child]
+    pub search_entry: TemplateChild<gtk4::SearchEntry>,
+    #[template_child]
+    pub search_button: TemplateChild<gtk4::ToggleButton>,
+    #[template_child]
+    pub tab_bar: TemplateChild<adw::TabBar>,
+    #[template_child]
+    pub tab_view: TemplateChild<adw::TabView>,
+    #[template_child]
+    pub sidebar: TemplateChild<WrenSidebar>,
+    #[template_child]
+    pub menu_button: TemplateChild<gtk4::MenuButton>,
+    #[template_child]
+    pub view_button: TemplateChild<gtk4::MenuButton>,
+    #[template_child]
+    pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
+
+    pub tabs: RefCell<Vec<TabState>>,
+    pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
+    pub show_hidden: Cell<bool>,
+    pub zoom_level: Cell<i32>,
+    pub undo_stack: RefCell<Vec<UndoOp>>,
+    pub redo_stack: RefCell<Vec<UndoOp>>,
+}
+
+#[glib::object_subclass]
+impl ObjectSubclass for WrenWindow {
+    const NAME: &'static str = "WrenWindow";
+    type Type = super::WrenWindow;
+    type ParentType = adw::ApplicationWindow;
+
+    fn class_init(klass: &mut Self::Class) {
+        WrenSidebar::ensure_type();
+        WrenBreadcrumbBar::ensure_type();
+        klass.bind_template();
+        klass.bind_template_callbacks();
+
+        klass.install_action("win.navigate-back", None, |win, _, _| {
+            win.navigate_back();
+        });
+        klass.install_action("win.navigate-forward", None, |win, _, _| {
+            win.navigate_forward();
+        });
+        klass.install_action("win.navigate-up", None, |win, _, _| {
+            win.navigate_up();
+        });
+        klass.install_action("win.toggle-search", None, |win, _, _| {
+            win.toggle_search();
+        });
+        klass.install_action("win.new-tab", None, |win, _, _| {
+            win.new_tab();
+        });
+        klass.install_action("win.close-tab", None, |win, _, _| {
+            win.close_tab();
+        });
+        klass.install_action("win.select-all", None, |win, _, _| {
+            win.select_all();
+        });
+        klass.install_action("win.open-settings", None, |win, _, _| {
+            win.open_settings();
+        });
+        klass.install_action("win.focus-location", None, |win, _, _| {
+            win.focus_location();
+        });
+        klass.install_action("win.open-selection", None, |win, _, _| {
+            win.open_selection();
+        });
+        klass.install_action("win.open-with", None, |win, _, _| {
+            win.open_with();
+        });
+        klass.install_action("win.open-in-terminal", None, |win, _, _| {
+            win.open_in_terminal();
+        });
+        klass.install_action("win.new-folder", None, |win, _, _| {
+            win.new_folder();
+        });
+        klass.install_action("win.rename", None, |win, _, _| {
+            win.rename_selection();
+        });
+        klass.install_action("win.move-to-trash", None, |win, _, _| {
+            win.move_to_trash();
+        });
+        klass.install_action("win.delete-permanently", None, |win, _, _| {
+            win.delete_permanently();
+        });
+        klass.install_action("win.copy", None, |win, _, _| {
+            win.copy_selection();
+        });
+        klass.install_action("win.cut", None, |win, _, _| {
+            win.cut_selection();
+        });
+        klass.install_action("win.paste", None, |win, _, _| {
+            win.paste();
+        });
+        klass.install_action("win.zoom-in", None, |win, _, _| {
+            win.zoom_in();
+        });
+        klass.install_action("win.zoom-out", None, |win, _, _| {
+            win.zoom_out();
+        });
+        klass.install_action("win.zoom-reset", None, |win, _, _| {
+            win.zoom_reset();
+        });
+        klass.install_action("win.properties", None, |win, _, _| {
+            win.show_properties();
+        });
+        klass.install_action("win.create-link", None, |win, _, _| {
+            win.create_link();
+        });
+        klass.install_action("win.add-bookmark", None, |win, _, _| {
+            win.add_bookmark();
+        });
+        klass.install_action("win.undo", None, |win, _, _| {
+            win.undo();
+        });
+        klass.install_action("win.redo", None, |win, _, _| {
+            win.redo();
+        });
+        klass.install_action("win.batch-rename", None, |win, _, _| {
+            win.batch_rename();
+        });
+    }
+
+    fn instance_init(obj: &InitializingObject<Self>) {
+        obj.init_template();
+    }
+}
+
+impl ObjectImpl for WrenWindow {
+    fn constructed(&self) {
+        self.parent_constructed();
+        let obj = self.obj();
+
+        self.zoom_level.set(3);
+
+        // Close-page: always confirm (we guard against closing the last tab in close_tab)
+        self.tab_view.connect_close_page(|tab_view, page| {
+            tab_view.close_page_finish(page, true);
+            glib::Propagation::Stop
+        });
+
+        // When selected tab changes, update breadcrumb and nav buttons
+        self.tab_view.connect_selected_page_notify(glib::clone!(
+            #[weak]
+            obj,
+            move |_| {
+                obj.on_tab_switched();
+            }
+        ));
+
+        // Stateful toggle-hidden action (drives checkmark in hamburger menu)
+        let toggle_hidden_action = gio::SimpleAction::new_stateful(
+            "toggle-hidden",
+            None,
+            &false.to_variant(),
+        );
+        toggle_hidden_action.connect_activate(glib::clone!(
+            #[weak]
+            obj,
+            move |action, _| {
+                let current = action
+                    .state()
+                    .and_then(|v| v.get::<bool>())
+                    .unwrap_or(false);
+                let new_val = !current;
+                action.set_state(&new_val.to_variant());
+                obj.imp().show_hidden.set(new_val);
+                obj.apply_hidden_filter();
+            }
+        ));
+        obj.add_action(&toggle_hidden_action);
+
+        // Stateful sort-key action (drives radio checkmarks in sort submenu)
+        let sort_key_action = gio::SimpleAction::new_stateful(
+            "set-sort-key",
+            Some(glib::VariantTy::STRING),
+            &"name".to_variant(),
+        );
+        sort_key_action.connect_activate(glib::clone!(
+            #[weak]
+            obj,
+            move |action, param| {
+                if let Some(key_str) = param.and_then(|v| v.str()) {
+                    action.set_state(&key_str.to_variant());
+                    obj.set_sort_key(key_str);
+                }
+            }
+        ));
+        obj.add_action(&sort_key_action);
+
+        // Stateful sort-reversed action
+        let sort_reversed_action = gio::SimpleAction::new_stateful(
+            "toggle-sort-reversed",
+            None,
+            &false.to_variant(),
+        );
+        sort_reversed_action.connect_activate(glib::clone!(
+            #[weak]
+            obj,
+            move |action, _| {
+                let current = action
+                    .state()
+                    .and_then(|v| v.get::<bool>())
+                    .unwrap_or(false);
+                let new_val = !current;
+                action.set_state(&new_val.to_variant());
+                obj.set_sort_reversed(new_val);
+            }
+        ));
+        obj.add_action(&sort_reversed_action);
+
+        // View mode dropdown
+        let view_menu = gio::Menu::new();
+        let grid_item = gio::MenuItem::new(Some("Grid"), None);
+        grid_item.set_action_and_target_value(
+            Some("win.set-view-mode"),
+            Some(&"grid".to_variant()),
+        );
+        view_menu.append_item(&grid_item);
+        let list_item = gio::MenuItem::new(Some("List"), None);
+        list_item.set_action_and_target_value(
+            Some("win.set-view-mode"),
+            Some(&"list".to_variant()),
+        );
+        view_menu.append_item(&list_item);
+        obj.imp().view_button.set_menu_model(Some(&view_menu));
+
+        // Stateful view-mode action
+        let view_mode_action = gio::SimpleAction::new_stateful(
+            "set-view-mode",
+            Some(glib::VariantTy::STRING),
+            &"grid".to_variant(),
+        );
+        view_mode_action.connect_activate(glib::clone!(
+            #[weak]
+            obj,
+            move |action, param| {
+                if let Some(mode) = param.and_then(|v| v.str()) {
+                    action.set_state(&mode.to_variant());
+                    obj.set_view_mode(mode);
+                }
+            }
+        ));
+        obj.add_action(&view_mode_action);
+
+        // Hamburger menu
+        let hamburger = gio::Menu::new();
+
+        let view_section = gio::Menu::new();
+        view_section.append(Some("Show Hidden Files"), Some("win.toggle-hidden"));
+        hamburger.append_section(None, &view_section);
+
+        // Sort submenu
+        let sort_submenu = gio::Menu::new();
+        let sort_keys_section = gio::Menu::new();
+        for (label, key) in &[
+            ("Name", "name"),
+            ("Size", "size"),
+            ("Date Modified", "date"),
+            ("Type", "type"),
+        ] {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(
+                Some("win.set-sort-key"),
+                Some(&key.to_variant()),
+            );
+            sort_keys_section.append_item(&item);
+        }
+        sort_submenu.append_section(None, &sort_keys_section);
+        let sort_options_section = gio::Menu::new();
+        sort_options_section.append(Some("Reversed"), Some("win.toggle-sort-reversed"));
+        sort_submenu.append_section(None, &sort_options_section);
+        let sort_section = gio::Menu::new();
+        sort_section.append_submenu(Some("Sort By"), &sort_submenu);
+        hamburger.append_section(None, &sort_section);
+
+        let edit_section = gio::Menu::new();
+        edit_section.append(Some("Undo"), Some("win.undo"));
+        edit_section.append(Some("Redo"), Some("win.redo"));
+        hamburger.append_section(None, &edit_section);
+
+        let settings_section = gio::Menu::new();
+        settings_section.append(Some("Settings…"), Some("win.open-settings"));
+        hamburger.append_section(None, &settings_section);
+
+        obj.imp().menu_button.set_menu_model(Some(&hamburger));
+
+        obj.setup_search();
+        obj.update_selection_actions();
+        obj.update_undo_actions();
+
+        // Open first tab at home
+        let home = gio::File::for_path(glib::home_dir());
+        obj.add_tab(home);
+    }
+}
+
+impl WidgetImpl for WrenWindow {}
+impl WindowImpl for WrenWindow {}
+impl ApplicationWindowImpl for WrenWindow {}
+impl AdwApplicationWindowImpl for WrenWindow {}
+
+#[gtk4::template_callbacks]
+impl WrenWindow {}

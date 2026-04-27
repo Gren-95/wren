@@ -1,0 +1,13 @@
+[package]
+name = "wren"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gtk4 = { version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_6", "gtk_v4_18"] }
+gio = { version = "0.22" }
+glib = { version = "0.22" }
+
+[build-dependencies]
+glib-build-tools = "0.22"

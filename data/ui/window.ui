@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <template class="WrenWindow" parent="AdwApplicationWindow">
+    <property name="title">Wren</property>
+    <property name="default-width">1000</property>
+    <property name="default-height">650</property>
+    <child>
+      <object class="AdwToolbarView">
+        <child type="top">
+          <object class="AdwHeaderBar" id="header_bar">
+            <child type="start">
+              <object class="GtkButton" id="back_button">
+                <property name="icon-name">go-previous-symbolic</property>
+                <property name="action-name">win.navigate-back</property>
+                <property name="sensitive">false</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="forward_button">
+                <property name="icon-name">go-next-symbolic</property>
+                <property name="action-name">win.navigate-forward</property>
+                <property name="sensitive">false</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <property name="title-widget">
+              <object class="WrenBreadcrumbBar" id="breadcrumb_bar">
+                <property name="hexpand">true</property>
+              </object>
+            </property>
+            <child type="end">
+              <object class="GtkMenuButton" id="menu_button">
+                <property name="icon-name">open-menu-symbolic</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkToggleButton" id="search_button">
+                <property name="icon-name">system-search-symbolic</property>
+                <property name="action-name">win.toggle-search</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkMenuButton" id="view_button">
+                <property name="icon-name">view-grid-symbolic</property>
+                <property name="direction">none</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+          </object>
+        </child>
+        <property name="content">
+          <object class="AdwOverlaySplitView" id="split_view">
+            <property name="show-sidebar">true</property>
+            <property name="sidebar-width-fraction">0.22</property>
+            <property name="min-sidebar-width">180</property>
+            <property name="max-sidebar-width">280</property>
+            <property name="sidebar">
+              <object class="AdwNavigationPage">
+                <property name="title">Places</property>
+                <property name="child">
+                  <object class="WrenSidebar" id="sidebar"/>
+                </property>
+              </object>
+            </property>
+            <property name="content">
+              <object class="AdwToastOverlay" id="toast_overlay">
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <child>
+                      <object class="AdwTabBar" id="tab_bar">
+                        <property name="view">tab_view</property>
+                        <property name="autohide">true</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkSearchBar" id="search_bar">
+                        <property name="search-mode-enabled">false</property>
+                        <child>
+                          <object class="GtkSearchEntry" id="search_entry">
+                            <property name="placeholder-text">Search files…</property>
+                            <property name="hexpand">true</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwTabView" id="tab_view">
+                        <property name="vexpand">true</property>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </property>
+          </object>
+        </property>
+      </object>
+    </child>
+  </template>
+</interface>
