@@ -36,6 +36,8 @@ pub struct WrenWindow {
     #[template_child]
     pub sidebar: TemplateChild<WrenSidebar>,
     #[template_child]
+    pub sidebar_button: TemplateChild<gtk4::ToggleButton>,
+    #[template_child]
     pub menu_button: TemplateChild<gtk4::MenuButton>,
     #[template_child]
     pub view_button: TemplateChild<gtk4::MenuButton>,
@@ -65,6 +67,7 @@ impl Default for WrenWindow {
             tab_bar: Default::default(),
             tab_view: Default::default(),
             sidebar: Default::default(),
+            sidebar_button: Default::default(),
             menu_button: Default::default(),
             view_button: Default::default(),
             breadcrumb_bar: Default::default(),
@@ -180,6 +183,14 @@ impl ObjectSubclass for WrenWindow {
         });
         klass.install_action("win.about", None, |win, _, _| {
             win.show_about();
+        });
+        klass.install_action("win.reload", None, |win, _, _| {
+            win.reload();
+        });
+        klass.install_action("win.toggle-sidebar", None, |win, _, _| {
+            let imp = win.imp();
+            let show = !imp.split_view.shows_sidebar();
+            imp.split_view.set_show_sidebar(show);
         });
     }
 
@@ -375,6 +386,42 @@ impl ObjectImpl for WrenWindow {
             obj.imp().show_hidden.set(app.show_hidden());
             obj.imp().zoom_level.set(app.zoom_level());
         }
+
+        // Sidebar toggle button — keep split_view and button in sync
+        obj.imp().sidebar_button.connect_toggled(glib::clone!(
+            #[weak]
+            obj,
+            move |btn| {
+                obj.imp().split_view.set_show_sidebar(btn.is_active());
+            }
+        ));
+        obj.imp().split_view.connect_show_sidebar_notify(glib::clone!(
+            #[weak]
+            obj,
+            move |sv| {
+                obj.imp().sidebar_button.set_active(sv.shows_sidebar());
+            }
+        ));
+
+        // Mouse back/forward button navigation (buttons 8 and 9)
+        let mouse_nav = gtk4::GestureClick::new();
+        mouse_nav.set_button(0);
+        mouse_nav.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        mouse_nav.connect_pressed(glib::clone!(
+            #[weak]
+            obj,
+            move |gesture, _, _, _| {
+                let btn = gesture.current_button();
+                if btn == 8 {
+                    let _ = gtk4::prelude::WidgetExt::activate_action(&obj, "win.navigate-back", None);
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                } else if btn == 9 {
+                    let _ = gtk4::prelude::WidgetExt::activate_action(&obj, "win.navigate-forward", None);
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                }
+            }
+        ));
+        obj.add_controller(mouse_nav);
 
         obj.setup_search();
         obj.update_selection_actions();

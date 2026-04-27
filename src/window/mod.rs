@@ -374,8 +374,13 @@ impl WrenWindow {
                         window.start_dir_monitor(tab_idx, &location);
                     }
                     Err(e) => {
-                        window.show_toast(&format!("Could not load folder: {e}"));
-                        content_stack.set_visible_child_name("empty");
+                        {
+                            let tabs = window.imp().tabs.borrow();
+                            if let Some(tab) = tabs.get(tab_idx) {
+                                tab.error_page.set_description(Some(&e.message().to_string()));
+                            }
+                        }
+                        content_stack.set_visible_child_name("error");
                     }
                 }
             }

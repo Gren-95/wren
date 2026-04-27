@@ -157,6 +157,7 @@ impl ApplicationImpl for WrenApplication {
         app.set_accels_for_action("win.redo", &["<Primary><Shift>z"]);
         app.set_accels_for_action("win.add-bookmark", &["<Primary>d"]);
         app.set_accels_for_action("win.batch-rename", &["<Primary><Shift>r"]);
+        app.set_accels_for_action("win.reload", &["F5"]);
     }
 }
 
