@@ -14,8 +14,6 @@ pub struct WrenBreadcrumbBar {
     pub mode_stack: TemplateChild<gtk4::Stack>,
     #[template_child]
     pub path_entry: TemplateChild<gtk4::Entry>,
-    #[template_child]
-    pub edit_button: TemplateChild<gtk4::Button>,
     pub current_location: RefCell<Option<gio::File>>,
 }
 
@@ -39,14 +37,6 @@ impl ObjectImpl for WrenBreadcrumbBar {
     fn constructed(&self) {
         self.parent_constructed();
         let obj = self.obj();
-
-        self.edit_button.connect_clicked(glib::clone!(
-            #[weak]
-            obj,
-            move |_| {
-                obj.enter_edit_mode();
-            }
-        ));
 
         self.path_entry.connect_activate(glib::clone!(
             #[weak]

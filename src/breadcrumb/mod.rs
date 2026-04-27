@@ -46,18 +46,26 @@ impl WrenBreadcrumbBar {
         for (i, ancestor) in ancestors.into_iter().enumerate() {
             let is_last = i == total - 1;
 
-            let basename = ancestor
+            let name = ancestor
                 .basename()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| "/".to_string());
 
             if is_last {
-                let label = gtk4::Label::new(Some(&basename));
-                label.add_css_class("wren-current-dir");
-                label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-                crumb_box.append(&label);
+                // Current directory — accent chip, click enters edit mode
+                let btn = gtk4::Button::with_label(&name);
+                btn.add_css_class("flat");
+                btn.add_css_class("wren-current-crumb");
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = bar)]
+                    self,
+                    move |_| {
+                        bar.enter_edit_mode();
+                    }
+                ));
+                crumb_box.append(&btn);
             } else {
-                let btn = gtk4::Button::with_label(&basename);
+                let btn = gtk4::Button::with_label(&name);
                 btn.add_css_class("flat");
                 btn.add_css_class("wren-breadcrumb");
 
@@ -79,7 +87,17 @@ impl WrenBreadcrumbBar {
             }
         }
 
-        // Switch back to breadcrumb view if we were in entry mode
+        // Scroll to the end so the current directory is always visible
+        let scrolled = crumb_box
+            .parent()
+            .and_downcast::<gtk4::ScrolledWindow>();
+        if let Some(sw) = scrolled {
+            glib::idle_add_local_once(move || {
+                let adj = sw.hadjustment();
+                adj.set_value(adj.upper() - adj.page_size());
+            });
+        }
+
         imp.mode_stack.set_visible_child_name("crumbs");
     }
 
@@ -115,6 +133,5 @@ impl WrenBreadcrumbBar {
         {
             win.navigate_to(file);
         }
-        // leave_edit_mode is called automatically via set_location after navigate_to
     }
 }

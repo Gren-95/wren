@@ -20,14 +20,8 @@
   font-size: 0.85em;
 }
 
-/* ── Breadcrumb path row container ──────────────────────────────────────── */
+/* ── Breadcrumb bar ──────────────────────────────────────────────────────── */
 
-.wren-path-row {
-  margin: 3px 4px;
-}
-
-/* Make the scrolled window and its viewport transparent so the
-   crumb-box background shows through cleanly */
 .wren-crumb-scroll,
 .wren-crumb-scroll > viewport {
   background: transparent;
@@ -35,16 +29,16 @@
   box-shadow: none;
 }
 
-/* Pill-shaped container for the crumbs */
+/* Pill container — subtle tinted background, like Nautilus */
 .wren-crumb-box {
-  background: alpha(currentColor, 0.07);
+  background: alpha(currentColor, 0.05);
   border-radius: 9999px;
-  padding: 2px 6px;
+  padding: 2px 4px;
 }
 
 /* Ancestor segment buttons */
 button.wren-breadcrumb {
-  padding: 1px 7px;
+  padding: 2px 8px;
   border-radius: 9999px;
   min-height: 0;
   min-width: 0;
@@ -53,43 +47,37 @@ button.wren-breadcrumb {
 }
 
 button.wren-breadcrumb:hover {
-  background-color: alpha(currentColor, 0.12);
+  background-color: alpha(currentColor, 0.1);
 }
 
-/* Chevron separators between crumbs */
+/* Chevron separators */
 image.wren-crumb-sep {
-  color: alpha(currentColor, 0.4);
-  margin: 0 -1px;
+  color: alpha(currentColor, 0.35);
+  margin: 0 -3px;
 }
 
-/* Current directory (last crumb, not a button) */
-label.wren-current-dir {
-  font-weight: 600;
-  padding: 1px 7px;
-  font-size: 0.9em;
-}
-
-/* Edit-location pencil button at the right end of the crumb row.
-   Using color-based dimming instead of the `opacity` property avoids
-   promoting the button to its own offscreen render layer — `opacity < 1`
-   on a widget forces GSK to composite it separately on every frame. */
-.wren-edit-location-btn {
-  padding: 2px 4px;
+/* Current directory — accent chip, clicking enters edit mode */
+button.wren-current-crumb {
+  padding: 2px 10px;
+  border-radius: 9999px;
   min-height: 0;
   min-width: 0;
-  color: alpha(currentColor, 0.5);
-  transition: color 100ms ease;
+  font-size: 0.9em;
+  font-weight: 600;
+  background-color: alpha(@accent_color, 0.15);
+  color: @accent_color;
+  transition: background-color 100ms ease;
 }
 
-.wren-edit-location-btn:hover {
-  color: currentColor;
+button.wren-current-crumb:hover {
+  background-color: alpha(@accent_color, 0.25);
 }
 
-/* Path entry shown when Ctrl+L is pressed */
+/* Path entry (Ctrl+L / clicking current crumb) */
 .wren-path-entry {
   border-radius: 9999px;
   min-height: 0;
-  padding: 2px 6px;
+  padding: 2px 8px;
 }
 
 /* ── List view rows ──────────────────────────────────────────────────────── */
