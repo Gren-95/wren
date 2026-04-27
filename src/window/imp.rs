@@ -50,7 +50,6 @@ pub struct WrenWindow {
     pub zoom_level: Cell<i32>,
     pub undo_stack: RefCell<Vec<UndoOp>>,
     pub redo_stack: RefCell<Vec<UndoOp>>,
-    pub window_title: adw::WindowTitle,
 }
 
 impl Default for WrenWindow {
@@ -77,7 +76,6 @@ impl Default for WrenWindow {
             zoom_level: Cell::new(3),
             undo_stack: Default::default(),
             redo_stack: Default::default(),
-            window_title: adw::WindowTitle::new("Wren", ""),
         }
     }
 }
@@ -373,11 +371,6 @@ impl ObjectImpl for WrenWindow {
         hamburger.append_section(None, &about_section);
 
         obj.imp().menu_button.set_menu_model(Some(&hamburger));
-
-        // AdwWindowTitle as header bar centre widget
-        let win_title = &obj.imp().window_title;
-        win_title.set_title("Wren");
-        obj.imp().header_bar.set_title_widget(Some(win_title));
 
         // Restore persisted settings
         if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {

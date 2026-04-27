@@ -263,24 +263,6 @@ impl WrenWindow {
         imp.breadcrumb_bar.set_location(&location);
         imp.sidebar.set_location(&location);
 
-        // Update header bar title
-        let folder_name = location
-            .basename()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Files".to_string());
-        let subtitle = location
-            .path()
-            .map(|p| {
-                let home = glib::home_dir();
-                match p.strip_prefix(&home) {
-                    Ok(rel) => format!("~/{}", rel.display()),
-                    Err(_) => p.display().to_string(),
-                }
-            })
-            .unwrap_or_default();
-        imp.window_title.set_title(&folder_name);
-        imp.window_title.set_subtitle(&subtitle);
-
         {
             let tabs = imp.tabs.borrow();
             if let Some(tab) = tabs.get(tab_idx) {
