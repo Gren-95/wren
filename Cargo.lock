@@ -695,6 +695,7 @@ dependencies = [
 name = "wren"
 version = "0.1.0"
 dependencies = [
+ "gdk-pixbuf",
  "gio",
  "glib",
  "glib-build-tools",

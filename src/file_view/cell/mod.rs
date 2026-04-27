@@ -6,6 +6,8 @@ use gtk4::prelude::*;
 
 use crate::model::FileObject;
 
+extern crate gdk_pixbuf;
+
 glib::wrapper! {
     pub struct WrenFileCell(ObjectSubclass<imp::WrenFileCell>)
         @extends gtk4::Widget,
@@ -35,22 +37,27 @@ use std::path::PathBuf;
 const TEXTURE_CACHE_MAX: usize = 256;
 
 thread_local! {
-    // (path, texture) in insertion order so we can evict the oldest entries.
-    static TEXTURE_CACHE: std::cell::RefCell<VecDeque<(PathBuf, gtk4::gdk::Texture)>> =
+    // (path, pixel_size, texture). Keyed by size so zoom changes produce
+    // correctly-scaled textures rather than reusing an oversized cached one.
+    static TEXTURE_CACHE: std::cell::RefCell<VecDeque<(PathBuf, i32, gtk4::gdk::Texture)>> =
         std::cell::RefCell::new(VecDeque::new());
 }
 
-fn cached_texture(path: &PathBuf) -> Option<gtk4::gdk::Texture> {
+// Pre-scale the thumbnail to exactly px×px via gdk_pixbuf so that
+// set_paintable() displays it at the right size instead of the
+// thumbnail file's intrinsic 128×128 resolution.
+fn cached_texture(path: &PathBuf, px: i32) -> Option<gtk4::gdk::Texture> {
     TEXTURE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
 
-        // Fast path: already cached
-        if let Some(entry) = cache.iter().find(|(p, _)| p == path) {
-            return Some(entry.1.clone());
+        // Fast path: already cached at this size
+        if let Some(entry) = cache.iter().find(|(p, s, _)| p == path && *s == px) {
+            return Some(entry.2.clone());
         }
 
-        // Decode from disk
-        let tex = gtk4::gdk::Texture::from_filename(path).ok()?;
+        // Scale to exactly px×px, preserving aspect ratio
+        let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(path, px, px, true).ok()?;
+        let tex = gtk4::gdk::Texture::for_pixbuf(&pixbuf);
 
         // Evict oldest 1/4 when at capacity to keep memory bounded
         if cache.len() >= TEXTURE_CACHE_MAX {
@@ -58,7 +65,7 @@ fn cached_texture(path: &PathBuf) -> Option<gtk4::gdk::Texture> {
             cache.drain(..evict);
         }
 
-        cache.push_back((path.clone(), tex.clone()));
+        cache.push_back((path.clone(), px, tex.clone()));
         Some(tex)
     })
 }
@@ -81,7 +88,7 @@ impl WrenFileCell {
 
         let mut thumb_loaded = false;
         if let Some(thumb_path) = file_obj.thumbnail_path() {
-            if let Some(texture) = cached_texture(&thumb_path) {
+            if let Some(texture) = cached_texture(&thumb_path, px) {
                 imp.icon.set_pixel_size(-1);
                 imp.icon.set_size_request(px, px);
                 imp.icon.set_paintable(Some(&texture));

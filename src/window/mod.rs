@@ -20,7 +20,12 @@ glib::wrapper! {
 
 impl WrenWindow {
     pub fn new(app: &WrenApplication) -> Self {
-        Object::builder().property("application", app).build()
+        let win: Self = Object::builder().property("application", app).build();
+        win.connect_close_request(|w| {
+            w.save_window_size();
+            glib::Propagation::Proceed
+        });
+        win
     }
 
     fn imp(&self) -> &imp::WrenWindow {
@@ -41,7 +46,7 @@ impl WrenWindow {
 
     pub fn add_tab(&self, location: gio::File) {
         let imp = self.imp();
-        let tab = TabState::new();
+        let mut tab = TabState::new();
 
         tab.file_grid.connect_item_activated(glib::clone!(
             #[weak(rename_to = window)]
@@ -83,6 +88,15 @@ impl WrenWindow {
         tab.file_list.setup_context_menu(&menu);
         tab.file_grid.setup_drag_source();
         tab.file_list.setup_drag_source();
+
+        // Restore persisted view mode and sort for new tabs
+        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
+            let mode = app.view_mode();
+            tab.view_stack.set_visible_child_name(&mode);
+            let sort_key = crate::model::SortKey::from_str(&app.sort_key());
+            tab.sort_key = sort_key;
+            tab.sort_reversed = app.sort_reversed();
+        }
 
         let page = imp.tab_view.append(&tab.content_widget);
         page.set_title("Home");
@@ -249,6 +263,24 @@ impl WrenWindow {
         imp.breadcrumb_bar.set_location(&location);
         imp.sidebar.set_location(&location);
 
+        // Update header bar title
+        let folder_name = location
+            .basename()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Files".to_string());
+        let subtitle = location
+            .path()
+            .map(|p| {
+                let home = glib::home_dir();
+                match p.strip_prefix(&home) {
+                    Ok(rel) => format!("~/{}", rel.display()),
+                    Err(_) => p.display().to_string(),
+                }
+            })
+            .unwrap_or_default();
+        imp.window_title.set_title(&folder_name);
+        imp.window_title.set_subtitle(&subtitle);
+
         {
             let tabs = imp.tabs.borrow();
             if let Some(tab) = tabs.get(tab_idx) {
@@ -399,6 +431,7 @@ impl WrenWindow {
         if current < 5 {
             imp.zoom_level.set(current + 1);
             self.apply_zoom();
+            self.save_zoom();
         }
     }
 
@@ -408,12 +441,20 @@ impl WrenWindow {
         if current > 1 {
             imp.zoom_level.set(current - 1);
             self.apply_zoom();
+            self.save_zoom();
         }
     }
 
     pub fn zoom_reset(&self) {
         self.imp().zoom_level.set(3);
         self.apply_zoom();
+        self.save_zoom();
+    }
+
+    fn save_zoom(&self) {
+        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
+            app.set_zoom_level(self.imp().zoom_level.get());
+        }
     }
 
     fn apply_zoom(&self) {
@@ -569,6 +610,7 @@ impl WrenWindow {
 
         let file_section = gio::Menu::new();
         file_section.append(Some("New Folder"), Some("win.new-folder"));
+        file_section.append(Some("Duplicate"), Some("win.duplicate"));
         file_section.append(Some("Rename"), Some("win.rename"));
         file_section.append(Some("Create Link"), Some("win.create-link"));
         file_section.append(Some("Add to Bookmarks"), Some("win.add-bookmark"));
@@ -1521,6 +1563,95 @@ impl WrenWindow {
 
     pub fn show_toast(&self, message: &str) {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
+    }
+
+    // ── About ────────────────────────────────────────────────────────────────
+
+    pub fn show_about(&self) {
+        let dialog = adw::AboutDialog::builder()
+            .application_name("Wren")
+            .version(env!("CARGO_PKG_VERSION"))
+            .application_icon("system-file-manager")
+            .developer_name("Wren contributors")
+            .website("https://github.com/Gren-95/wren")
+            .issue_url("https://github.com/Gren-95/wren/issues")
+            .license_type(gtk4::License::MitX11)
+            .build();
+        dialog.present(Some(self));
+    }
+
+    // ── Duplicate ────────────────────────────────────────────────────────────
+
+    pub fn duplicate(&self) {
+        let current_dir = {
+            let Some(idx) = self.current_tab_index() else { return };
+            let tabs = self.imp().tabs.borrow();
+            tabs.get(idx).and_then(|t| t.navigation.current().cloned())
+        };
+        let Some(dest_dir) = current_dir else { return };
+        let Some(dest_dir_path) = dest_dir.path() else {
+            self.show_toast("Cannot duplicate: current directory is not local");
+            return;
+        };
+
+        let files = self.selected_files();
+        if files.is_empty() { return; }
+
+        for file in files {
+            let Some(src_path) = file.path() else { continue };
+            let name = src_path.file_name().unwrap_or_default();
+            let stem = std::path::Path::new(name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("copy");
+            let ext = std::path::Path::new(name)
+                .extension()
+                .and_then(|s| s.to_str());
+            let make_name = |suffix: &str| match ext {
+                Some(e) => format!("{stem}{suffix}.{e}"),
+                None => format!("{stem}{suffix}"),
+            };
+            let dest_path = {
+                let first = dest_dir_path.join(make_name(" (copy)"));
+                if !first.exists() {
+                    first
+                } else {
+                    (2u32..)
+                        .find_map(|i| {
+                            let p = dest_dir_path.join(make_name(&format!(" (copy {i})")));
+                            (!p.exists()).then_some(p)
+                        })
+                        .expect("will eventually find a free name")
+                }
+            };
+            let dest_file = gio::File::for_path(&dest_path);
+            glib::spawn_future_local(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                async move {
+                    if let Err(e) = file
+                        .copy_future(
+                            &dest_file,
+                            gio::FileCopyFlags::NONE,
+                            glib::Priority::DEFAULT,
+                        )
+                        .0
+                        .await
+                    {
+                        window.show_toast(&format!("Could not duplicate: {e}"));
+                    }
+                }
+            ));
+        }
+    }
+
+    // ── Window size persistence ───────────────────────────────────────────────
+
+    pub fn save_window_size(&self) {
+        let (w, h) = self.default_size();
+        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
+            app.set_window_size(w, h);
+        }
     }
 }
 

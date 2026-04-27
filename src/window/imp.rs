@@ -10,7 +10,7 @@ use crate::sidebar::WrenSidebar;
 use crate::window::tab::TabState;
 use crate::window::undo::UndoOp;
 
-#[derive(Debug, Default, CompositeTemplate)]
+#[derive(Debug, CompositeTemplate)]
 #[template(resource = "/io/github/wren/ui/window.ui")]
 pub struct WrenWindow {
     #[template_child]
@@ -48,6 +48,35 @@ pub struct WrenWindow {
     pub zoom_level: Cell<i32>,
     pub undo_stack: RefCell<Vec<UndoOp>>,
     pub redo_stack: RefCell<Vec<UndoOp>>,
+    pub window_title: adw::WindowTitle,
+}
+
+impl Default for WrenWindow {
+    fn default() -> Self {
+        Self {
+            header_bar: Default::default(),
+            back_button: Default::default(),
+            forward_button: Default::default(),
+            split_view: Default::default(),
+            toast_overlay: Default::default(),
+            search_bar: Default::default(),
+            search_entry: Default::default(),
+            search_button: Default::default(),
+            tab_bar: Default::default(),
+            tab_view: Default::default(),
+            sidebar: Default::default(),
+            menu_button: Default::default(),
+            view_button: Default::default(),
+            breadcrumb_bar: Default::default(),
+            tabs: Default::default(),
+            clipboard_files: Default::default(),
+            show_hidden: Default::default(),
+            zoom_level: Cell::new(3),
+            undo_stack: Default::default(),
+            redo_stack: Default::default(),
+            window_title: adw::WindowTitle::new("Wren", ""),
+        }
+    }
 }
 
 #[glib::object_subclass]
@@ -146,6 +175,12 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action("win.batch-rename", None, |win, _, _| {
             win.batch_rename();
         });
+        klass.install_action("win.duplicate", None, |win, _, _| {
+            win.duplicate();
+        });
+        klass.install_action("win.about", None, |win, _, _| {
+            win.show_about();
+        });
     }
 
     fn instance_init(obj: &InitializingObject<Self>) {
@@ -193,6 +228,9 @@ impl ObjectImpl for WrenWindow {
                 action.set_state(&new_val.to_variant());
                 obj.imp().show_hidden.set(new_val);
                 obj.apply_hidden_filter();
+                if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
+                    app.set_show_hidden(new_val);
+                }
             }
         ));
         obj.add_action(&toggle_hidden_action);
@@ -210,6 +248,9 @@ impl ObjectImpl for WrenWindow {
                 if let Some(key_str) = param.and_then(|v| v.str()) {
                     action.set_state(&key_str.to_variant());
                     obj.set_sort_key(key_str);
+                    if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
+                        app.set_sort_key_pref(key_str);
+                    }
                 }
             }
         ));
@@ -232,6 +273,9 @@ impl ObjectImpl for WrenWindow {
                 let new_val = !current;
                 action.set_state(&new_val.to_variant());
                 obj.set_sort_reversed(new_val);
+                if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
+                    app.set_sort_reversed_pref(new_val);
+                }
             }
         ));
         obj.add_action(&sort_reversed_action);
@@ -265,6 +309,9 @@ impl ObjectImpl for WrenWindow {
                 if let Some(mode) = param.and_then(|v| v.str()) {
                     action.set_state(&mode.to_variant());
                     obj.set_view_mode(mode);
+                    if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
+                        app.set_view_mode_pref(mode);
+                    }
                 }
             }
         ));
@@ -310,7 +357,24 @@ impl ObjectImpl for WrenWindow {
         settings_section.append(Some("Settings…"), Some("win.open-settings"));
         hamburger.append_section(None, &settings_section);
 
+        let about_section = gio::Menu::new();
+        about_section.append(Some("About Wren"), Some("win.about"));
+        hamburger.append_section(None, &about_section);
+
         obj.imp().menu_button.set_menu_model(Some(&hamburger));
+
+        // AdwWindowTitle as header bar centre widget
+        let win_title = &obj.imp().window_title;
+        win_title.set_title("Wren");
+        obj.imp().header_bar.set_title_widget(Some(win_title));
+
+        // Restore persisted settings
+        if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
+            let (w, h) = app.window_size();
+            obj.set_default_size(w, h);
+            obj.imp().show_hidden.set(app.show_hidden());
+            obj.imp().zoom_level.set(app.zoom_level());
+        }
 
         obj.setup_search();
         obj.update_selection_actions();
