@@ -80,9 +80,12 @@ impl WrenBreadcrumbBar {
                 });
                 crumb_box.append(&btn);
 
-                let sep = gtk4::Label::new(Some("/"));
-                sep.add_css_class("wren-crumb-sep");
-                crumb_box.append(&sep);
+                // Root already IS "/" — adding a separator would produce "//"
+                if name != "/" {
+                    let sep = gtk4::Label::new(Some("/"));
+                    sep.add_css_class("wren-crumb-sep");
+                    crumb_box.append(&sep);
+                }
             }
         }
 
