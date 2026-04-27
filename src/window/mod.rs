@@ -136,7 +136,7 @@ impl WrenWindow {
         let Some(idx) = self.current_tab_index() else {
             return;
         };
-        let (mode, sort_key, sort_reversed);
+        let (mode, sort_key, sort_reversed, window_title);
         {
             let imp = self.imp();
             let tabs = imp.tabs.borrow();
@@ -151,10 +151,17 @@ impl WrenWindow {
                 .unwrap_or_else(|| "grid".to_string());
             sort_key = tab.sort_key;
             sort_reversed = tab.sort_reversed;
+            window_title = tab
+                .navigation
+                .current()
+                .and_then(|loc| loc.basename())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Files".to_string());
             if let Some(loc) = tab.navigation.current() {
                 imp.breadcrumb_bar.set_location(loc);
             }
         }
+        self.set_title(Some(&window_title));
         // Sync view-mode action state
         if let Some(a) = self.lookup_action("set-view-mode") {
             if let Ok(a) = a.downcast::<gio::SimpleAction>() {
@@ -233,6 +240,10 @@ impl WrenWindow {
         }
     }
 
+    pub fn navigate_home(&self) {
+        self.navigate_to(gio::File::for_path(glib::home_dir()));
+    }
+
     pub fn navigate_up(&self) {
         let Some(idx) = self.current_tab_index() else {
             return;
@@ -289,6 +300,7 @@ impl WrenWindow {
         let filter_model;
         let selection;
         let content_stack;
+        let status_bar;
         {
             let mut tabs = imp.tabs.borrow_mut();
             let Some(tab) = tabs.get_mut(tab_idx) else {
@@ -303,6 +315,7 @@ impl WrenWindow {
             filter_model = dir_model.filter_model.clone();
             selection = dir_model.selection.clone();
             content_stack = tab.content_stack.clone();
+            status_bar = tab.status_bar.clone();
             load_future = dir_model.start_load();
             tab.dir_model = Some(dir_model);
         }
@@ -341,9 +354,11 @@ impl WrenWindow {
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "Files".to_string());
                 page.set_title(&title);
+                self.set_title(Some(&title));
             }
         }
 
+        status_bar.set_text("");
         content_stack.set_visible_child_name("loading");
 
         glib::spawn_future_local(glib::clone!(
@@ -1744,6 +1759,12 @@ impl WrenWindow {
                     }
                 }
             ));
+        }
+    }
+
+    pub fn new_window(&self) {
+        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
+            WrenWindow::new(&app).present();
         }
     }
 

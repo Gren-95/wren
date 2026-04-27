@@ -190,6 +190,12 @@ impl ObjectSubclass for WrenWindow {
             let show = !imp.split_view.shows_sidebar();
             imp.split_view.set_show_sidebar(show);
         });
+        klass.install_action("win.navigate-home", None, |win, _, _| {
+            win.navigate_home();
+        });
+        klass.install_action("win.new-window", None, |win, _, _| {
+            win.new_window();
+        });
     }
 
     fn instance_init(obj: &InitializingObject<Self>) {
