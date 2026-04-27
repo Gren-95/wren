@@ -86,15 +86,27 @@ impl WrenBreadcrumbBar {
             }
         }
 
-        // Scroll to the end so the current directory is always visible
+        // Scroll to the end so the current directory is always visible.
+        // Connect once to the adjustment's changed signal — it fires after
+        // GTK finishes measuring and allocating the new crumbs, at which
+        // point upper and page-size have their final values.
         let scrolled = crumb_box
             .parent()
             .and_downcast::<gtk4::ScrolledWindow>();
         if let Some(sw) = scrolled {
-            glib::idle_add_local_once(move || {
-                let adj = sw.hadjustment();
-                adj.set_value(adj.upper() - adj.page_size());
+            let adj = sw.hadjustment();
+            let handler_id = std::rc::Rc::new(std::cell::Cell::new(
+                None::<glib::SignalHandlerId>,
+            ));
+            let handler_id_clone = std::rc::Rc::clone(&handler_id);
+            let adj_clone = adj.clone();
+            let id = adj.connect_changed(move |a| {
+                a.set_value(a.upper() - a.page_size());
+                if let Some(id) = handler_id_clone.take() {
+                    adj_clone.disconnect(id);
+                }
             });
+            handler_id.set(Some(id));
         }
 
         imp.mode_stack.set_visible_child_name("crumbs");
