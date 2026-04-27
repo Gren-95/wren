@@ -342,6 +342,14 @@ impl WrenWindow {
             }
         ));
 
+        filter_model.connect_items_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _, _, _| {
+                window.update_status_bar();
+            }
+        ));
+
         {
             let tabs = imp.tabs.borrow();
             if let Some(tab) = tabs.get(tab_idx) {
@@ -908,67 +916,99 @@ impl WrenWindow {
         if files.is_empty() {
             return;
         }
-        glib::spawn_future_local(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            async move {
-                for file in &files {
-                    match file.trash_future(glib::Priority::DEFAULT).await {
-                        Ok(()) => {}
-                        Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
-                            // Filesystem has no trash (e.g. external drive without .Trash dir).
-                            // Offer permanent deletion as a fallback.
-                            let dialog = adw::AlertDialog::new(
-                                Some("Cannot Move to Trash"),
-                                Some("This location does not support trash. Delete permanently instead?"),
-                            );
-                            dialog.add_response("cancel", "Cancel");
-                            dialog.add_response("delete", "Delete Permanently");
-                            dialog.set_response_appearance(
-                                "delete",
-                                adw::ResponseAppearance::Destructive,
-                            );
-                            dialog.set_default_response(Some("cancel"));
-                            dialog.set_close_response("cancel");
-                            let file_clone = file.clone();
-                            dialog.connect_response(
-                                None,
-                                glib::clone!(
+        let n = files.len();
+        let name = files
+            .first()
+            .and_then(|f| f.basename())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let body = if n == 1 {
+            format!("\"{name}\" will be moved to the Trash.")
+        } else {
+            format!("{n} items will be moved to the Trash.")
+        };
+        let confirm = adw::AlertDialog::new(Some("Move to Trash?"), Some(&body));
+        confirm.add_response("cancel", "Cancel");
+        confirm.add_response("trash", "Move to Trash");
+        confirm.set_response_appearance("trash", adw::ResponseAppearance::Destructive);
+        confirm.set_default_response(Some("cancel"));
+        confirm.set_close_response("cancel");
+        let files = std::rc::Rc::new(files);
+        confirm.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| {
+                    if response != "trash" {
+                        return;
+                    }
+                    let files = (*files).clone();
+                    glib::spawn_future_local(glib::clone!(
+                        #[weak]
+                        window,
+                        async move {
+                            window.do_trash_files(files).await;
+                        }
+                    ));
+                }
+            ),
+        );
+        confirm.present(Some(self));
+    }
+
+    async fn do_trash_files(&self, files: Vec<gio::File>) {
+        for file in &files {
+            match file.trash_future(glib::Priority::DEFAULT).await {
+                Ok(()) => {}
+                Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
+                    let dialog = adw::AlertDialog::new(
+                        Some("Cannot Move to Trash"),
+                        Some("This location does not support trash. Delete permanently instead?"),
+                    );
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("delete", "Delete Permanently");
+                    dialog.set_response_appearance(
+                        "delete",
+                        adw::ResponseAppearance::Destructive,
+                    );
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+                    let file_clone = file.clone();
+                    dialog.connect_response(
+                        None,
+                        glib::clone!(
+                            #[weak(rename_to = window)]
+                            self,
+                            move |_, response| {
+                                if response != "delete" {
+                                    return;
+                                }
+                                let f = file_clone.clone();
+                                glib::spawn_future_local(glib::clone!(
                                     #[weak]
                                     window,
-                                    move |_, response| {
-                                        if response != "delete" {
-                                            return;
+                                    async move {
+                                        if let Err(e) = delete_recursive(f).await {
+                                            window.show_toast(&format!("Could not delete: {e}"));
+                                        } else {
+                                            window.reload();
                                         }
-                                        let f = file_clone.clone();
-                                        glib::spawn_future_local(glib::clone!(
-                                            #[weak]
-                                            window,
-                                            async move {
-                                                if let Err(e) = delete_recursive(f).await {
-                                                    window.show_toast(&format!(
-                                                        "Could not delete: {e}"
-                                                    ));
-                                                } else {
-                                                    window.reload();
-                                                }
-                                            }
-                                        ));
                                     }
-                                ),
-                            );
-                            dialog.present(Some(&window));
-                            return;
-                        }
-                        Err(e) => {
-                            window.show_toast(&format!("Could not trash: {e}"));
-                            return;
-                        }
-                    }
+                                ));
+                            }
+                        ),
+                    );
+                    dialog.present(Some(self));
+                    return;
                 }
-                window.reload();
+                Err(e) => {
+                    self.show_toast(&format!("Could not trash: {e}"));
+                    return;
+                }
             }
-        ));
+        }
+        self.reload();
     }
 
     pub fn delete_permanently(&self) {
@@ -1024,13 +1064,12 @@ impl WrenWindow {
         if files.is_empty() {
             return;
         }
-        let uris: String = files
-            .iter()
-            .map(|f| f.uri().to_string())
-            .collect::<Vec<_>>()
-            .join("\r\n");
-        self.imp().clipboard_files.replace(Some((files, false)));
-        self.clipboard().set_text(&uris);
+        let uris: Vec<String> = files.iter().map(|f| f.uri().to_string()).collect();
+        self.imp()
+            .clipboard_files
+            .replace(Some((files, false)));
+        self.clipboard().set_text(&uris.join("\r\n"));
+        self.update_cut_indicator(&[]);
         self.show_toast("Copied");
     }
 
@@ -1039,14 +1078,24 @@ impl WrenWindow {
         if files.is_empty() {
             return;
         }
-        let uris: String = files
-            .iter()
-            .map(|f| f.uri().to_string())
-            .collect::<Vec<_>>()
-            .join("\r\n");
-        self.imp().clipboard_files.replace(Some((files, true)));
-        self.clipboard().set_text(&uris);
+        let uris: Vec<String> = files.iter().map(|f| f.uri().to_string()).collect();
+        self.imp()
+            .clipboard_files
+            .replace(Some((files, true)));
+        self.clipboard().set_text(&uris.join("\r\n"));
+        self.update_cut_indicator(&uris);
         self.show_toast("Cut");
+    }
+
+    fn update_cut_indicator(&self, uris: &[String]) {
+        let Some(idx) = self.current_tab_index() else {
+            return;
+        };
+        let tabs = self.imp().tabs.borrow();
+        if let Some(tab) = tabs.get(idx) {
+            tab.file_grid.set_cut_uris(uris);
+            tab.file_list.set_cut_uris(uris);
+        }
     }
 
     pub fn paste(&self) {
@@ -1122,6 +1171,7 @@ impl WrenWindow {
                 }
                 if is_cut {
                     window.imp().clipboard_files.replace(None);
+                    window.update_cut_indicator(&[]);
                 }
                 window.reload();
             }
@@ -1599,6 +1649,30 @@ impl WrenWindow {
         ] {
             self.action_set_enabled(action, has_selection);
         }
+        self.update_status_bar();
+    }
+
+    fn update_status_bar(&self) {
+        let Some(idx) = self.current_tab_index() else {
+            return;
+        };
+        let (n_total, n_selected, label) = {
+            let tabs = self.imp().tabs.borrow();
+            let Some(tab) = tabs.get(idx) else { return };
+            let Some(model) = tab.dir_model.as_ref() else { return };
+            let n_total = model.selection.n_items();
+            let n_selected = model.selection.selection().size() as u32;
+            (n_total, n_selected, tab.status_bar.clone())
+        };
+        let text = if n_selected == 0 {
+            format!("{n_total} item{}", if n_total == 1 { "" } else { "s" })
+        } else {
+            format!(
+                "{n_total} item{}, {n_selected} selected",
+                if n_total == 1 { "" } else { "s" }
+            )
+        };
+        label.set_text(&text);
     }
 
     pub fn update_undo_actions(&self) {

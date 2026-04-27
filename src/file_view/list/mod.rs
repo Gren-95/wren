@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use adw::subclass::prelude::*;
 use glib::Object;
 use gtk4::gdk;
@@ -18,6 +22,38 @@ impl Default for WrenFileList {
     }
 }
 
+fn make_row_factory(cut_uris: Rc<RefCell<HashSet<String>>>) -> gtk4::SignalListItemFactory {
+    let factory = gtk4::SignalListItemFactory::new();
+    factory.connect_setup(|_, obj| {
+        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+        list_item.set_child(Some(&WrenFileRow::new()));
+    });
+    factory.connect_bind(move |_, obj| {
+        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+        let file_obj = list_item
+            .item()
+            .and_downcast::<FileObject>()
+            .expect("item must be FileObject");
+        let row = list_item
+            .child()
+            .and_downcast::<WrenFileRow>()
+            .expect("child must be WrenFileRow");
+        let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
+        row.bind(&file_obj);
+        if is_cut {
+            row.set_opacity(0.5);
+        }
+    });
+    factory.connect_unbind(|_, obj| {
+        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+        if let Some(row) = list_item.child().and_downcast::<WrenFileRow>() {
+            row.set_opacity(1.0);
+            row.unbind();
+        }
+    });
+    factory
+}
+
 impl WrenFileList {
     pub fn new() -> Self {
         Object::builder().build()
@@ -26,6 +62,16 @@ impl WrenFileList {
     pub fn set_model(&self, model: &gtk4::MultiSelection) {
         let imp = imp::WrenFileList::from_obj(self);
         imp.list_view.set_model(Some(model));
+    }
+
+    pub fn set_cut_uris(&self, uris: &[String]) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let mut set = imp.cut_uris.borrow_mut();
+        set.clear();
+        set.extend(uris.iter().cloned());
+        drop(set);
+        imp.list_view
+            .set_factory(Some(&make_row_factory(Rc::clone(&imp.cut_uris))));
     }
 
     pub fn setup_drag_source(&self) {
@@ -90,9 +136,19 @@ impl WrenFileList {
 mod imp {
     use super::*;
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub struct WrenFileList {
         pub list_view: gtk4::ListView,
+        pub cut_uris: Rc<RefCell<HashSet<String>>>,
+    }
+
+    impl Default for WrenFileList {
+        fn default() -> Self {
+            Self {
+                list_view: Default::default(),
+                cut_uris: Rc::new(RefCell::new(HashSet::new())),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -110,35 +166,8 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            let factory = gtk4::SignalListItemFactory::new();
-
-            factory.connect_setup(|_, obj| {
-                let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-                let row = WrenFileRow::new();
-                list_item.set_child(Some(&row));
-            });
-
-            factory.connect_bind(|_, obj| {
-                let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-                let file_obj = list_item
-                    .item()
-                    .and_downcast::<FileObject>()
-                    .expect("item must be FileObject");
-                let row = list_item
-                    .child()
-                    .and_downcast::<WrenFileRow>()
-                    .expect("child must be WrenFileRow");
-                row.bind(&file_obj);
-            });
-
-            factory.connect_unbind(|_, obj| {
-                let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-                if let Some(row) = list_item.child().and_downcast::<WrenFileRow>() {
-                    row.unbind();
-                }
-            });
-
-            self.list_view.set_factory(Some(&factory));
+            self.list_view
+                .set_factory(Some(&super::make_row_factory(Rc::clone(&self.cut_uris))));
             self.list_view.set_enable_rubberband(true);
             self.list_view.set_vexpand(true);
             self.list_view.set_hexpand(true);

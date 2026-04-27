@@ -14,11 +14,13 @@ pub struct TabState {
     pub view_stack: gtk4::Stack,
     pub file_grid: WrenFileGrid,
     pub file_list: WrenFileList,
+    pub error_page: adw::StatusPage,
     pub navigation: NavigationModel,
     pub dir_model: Option<DirectoryModel>,
     pub dir_monitor: RefCell<Option<gio::FileMonitor>>,
     pub sort_key: SortKey,
     pub sort_reversed: bool,
+    pub status_bar: gtk4::Label,
 }
 
 impl TabState {
@@ -55,14 +57,42 @@ impl TabState {
             .description("Try a different search term.")
             .build();
 
+        let error_page = adw::StatusPage::builder()
+            .icon_name("dialog-error-symbolic")
+            .title("Could not open folder")
+            .build();
+        let retry_button = gtk4::Button::builder()
+            .label("Retry")
+            .halign(gtk4::Align::Center)
+            .action_name("win.reload")
+            .build();
+        retry_button.add_css_class("suggested-action");
+        error_page.set_child(Some(&retry_button));
+
         let content_stack = gtk4::Stack::new();
         content_stack.set_vexpand(true);
         content_stack.add_named(&spinner_box, Some("loading"));
         content_stack.add_named(&empty_page, Some("empty"));
         content_stack.add_named(&no_results_page, Some("no-results"));
+        content_stack.add_named(&error_page, Some("error"));
         content_stack.add_named(&view_stack, Some("files"));
 
-        let content_widget = content_stack.clone().upcast::<gtk4::Widget>();
+        let status_bar = gtk4::Label::new(None);
+        status_bar.set_halign(gtk4::Align::Start);
+        status_bar.set_margin_start(8);
+        status_bar.set_margin_end(8);
+        status_bar.set_margin_top(3);
+        status_bar.set_margin_bottom(3);
+        status_bar.add_css_class("dim-label");
+        status_bar.add_css_class("caption");
+
+        let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        outer.set_vexpand(true);
+        outer.append(&content_stack);
+        outer.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+        outer.append(&status_bar);
+
+        let content_widget = outer.upcast::<gtk4::Widget>();
 
         Self {
             content_widget,
@@ -70,11 +100,13 @@ impl TabState {
             view_stack,
             file_grid: grid,
             file_list: list,
+            error_page,
             navigation: NavigationModel::default(),
             dir_model: None,
             dir_monitor: RefCell::new(None),
             sort_key: SortKey::Name,
             sort_reversed: false,
+            status_bar,
         }
     }
 

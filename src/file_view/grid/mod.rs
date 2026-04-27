@@ -1,3 +1,7 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use adw::subclass::prelude::*;
 use glib::Object;
 use gtk4::gdk;
@@ -18,13 +22,14 @@ impl Default for WrenFileGrid {
     }
 }
 
-/// Build a SignalListItemFactory for the grid view with a specific icon size.
-fn make_cell_factory(icon_size: u32) -> gtk4::SignalListItemFactory {
+fn make_cell_factory(
+    icon_size: u32,
+    cut_uris: Rc<RefCell<HashSet<String>>>,
+) -> gtk4::SignalListItemFactory {
     let factory = gtk4::SignalListItemFactory::new();
     factory.connect_setup(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-        let cell = WrenFileCell::new();
-        list_item.set_child(Some(&cell));
+        list_item.set_child(Some(&WrenFileCell::new()));
     });
     factory.connect_bind(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
@@ -36,11 +41,16 @@ fn make_cell_factory(icon_size: u32) -> gtk4::SignalListItemFactory {
             .child()
             .and_downcast::<WrenFileCell>()
             .expect("child must be WrenFileCell");
+        let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
         cell.bind(&file_obj, icon_size);
+        if is_cut {
+            cell.set_opacity(0.5);
+        }
     });
     factory.connect_unbind(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
         if let Some(cell) = list_item.child().and_downcast::<WrenFileCell>() {
+            cell.set_opacity(1.0);
             cell.unbind();
         }
     });
@@ -56,10 +66,22 @@ impl WrenFileGrid {
         imp::WrenFileGrid::from_obj(self).grid_view.set_model(Some(model));
     }
 
-    /// Replace the factory so all cells re-bind with the new icon size.
     pub fn set_icon_size(&self, icon_size: u32) {
         let imp = imp::WrenFileGrid::from_obj(self);
-        imp.grid_view.set_factory(Some(&make_cell_factory(icon_size)));
+        imp.current_icon_size.set(icon_size);
+        imp.grid_view
+            .set_factory(Some(&make_cell_factory(icon_size, Rc::clone(&imp.cut_uris))));
+    }
+
+    pub fn set_cut_uris(&self, uris: &[String]) {
+        let imp = imp::WrenFileGrid::from_obj(self);
+        let mut set = imp.cut_uris.borrow_mut();
+        set.clear();
+        set.extend(uris.iter().cloned());
+        drop(set);
+        let icon_size = imp.current_icon_size.get();
+        imp.grid_view
+            .set_factory(Some(&make_cell_factory(icon_size, Rc::clone(&imp.cut_uris))));
     }
 
     pub fn setup_drag_source(&self) {
@@ -124,9 +146,21 @@ impl WrenFileGrid {
 mod imp {
     use super::*;
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub struct WrenFileGrid {
         pub grid_view: gtk4::GridView,
+        pub current_icon_size: Cell<u32>,
+        pub cut_uris: Rc<RefCell<HashSet<String>>>,
+    }
+
+    impl Default for WrenFileGrid {
+        fn default() -> Self {
+            Self {
+                grid_view: Default::default(),
+                current_icon_size: Cell::new(64),
+                cut_uris: Rc::new(RefCell::new(HashSet::new())),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -144,17 +178,17 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            self.grid_view.set_factory(Some(&super::make_cell_factory(64)));
+            self.grid_view.set_factory(Some(&super::make_cell_factory(
+                64,
+                Rc::clone(&self.cut_uris),
+            )));
             self.grid_view.set_min_columns(2);
             self.grid_view.set_max_columns(16);
             self.grid_view.set_enable_rubberband(true);
             self.grid_view.set_vexpand(true);
             self.grid_view.set_hexpand(true);
-            // Overflow::Hidden lets the GSK clip pass discard render nodes that
-            // lie fully outside the viewport, saving GPU work while scrolling.
             self.grid_view.set_overflow(gtk4::Overflow::Hidden);
 
-            // Ctrl+scroll → zoom in/out via the window action
             let scroll = gtk4::EventControllerScroll::new(
                 gtk4::EventControllerScrollFlags::VERTICAL,
             );
@@ -182,8 +216,6 @@ mod imp {
             scrolled.set_child(Some(&self.grid_view));
             scrolled.set_vexpand(true);
             scrolled.set_hexpand(true);
-            // Kinetic (physics-based) scrolling uses GPU frame-clock animation
-            // so velocity decay runs without touching the widget tree.
             scrolled.set_kinetic_scrolling(true);
             scrolled.set_overflow(gtk4::Overflow::Hidden);
             scrolled.set_parent(&*self.obj());
