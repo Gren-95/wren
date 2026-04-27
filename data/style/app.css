@@ -50,10 +50,11 @@ button.wren-breadcrumb:hover {
   background-color: alpha(currentColor, 0.1);
 }
 
-/* Chevron separators */
-image.wren-crumb-sep {
+/* Slash separators */
+label.wren-crumb-sep {
   color: alpha(currentColor, 0.35);
-  margin: 0 -3px;
+  font-size: 0.9em;
+  margin: 0 -4px;
 }
 
 /* Current directory — accent chip, clicking enters edit mode */

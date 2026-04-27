@@ -80,8 +80,7 @@ impl WrenBreadcrumbBar {
                 });
                 crumb_box.append(&btn);
 
-                let sep = gtk4::Image::from_icon_name("go-next-symbolic");
-                sep.set_pixel_size(12);
+                let sep = gtk4::Label::new(Some("/"));
                 sep.add_css_class("wren-crumb-sep");
                 crumb_box.append(&sep);
             }
