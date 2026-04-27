@@ -908,9 +908,57 @@ impl WrenWindow {
             self,
             async move {
                 for file in &files {
-                    if let Err(e) = file.trash_future(glib::Priority::DEFAULT).await {
-                        window.show_toast(&format!("Could not trash: {e}"));
-                        return;
+                    match file.trash_future(glib::Priority::DEFAULT).await {
+                        Ok(()) => {}
+                        Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
+                            // Filesystem has no trash (e.g. external drive without .Trash dir).
+                            // Offer permanent deletion as a fallback.
+                            let dialog = adw::AlertDialog::new(
+                                Some("Cannot Move to Trash"),
+                                Some("This location does not support trash. Delete permanently instead?"),
+                            );
+                            dialog.add_response("cancel", "Cancel");
+                            dialog.add_response("delete", "Delete Permanently");
+                            dialog.set_response_appearance(
+                                "delete",
+                                adw::ResponseAppearance::Destructive,
+                            );
+                            dialog.set_default_response(Some("cancel"));
+                            dialog.set_close_response("cancel");
+                            let file_clone = file.clone();
+                            dialog.connect_response(
+                                None,
+                                glib::clone!(
+                                    #[weak]
+                                    window,
+                                    move |_, response| {
+                                        if response != "delete" {
+                                            return;
+                                        }
+                                        let f = file_clone.clone();
+                                        glib::spawn_future_local(glib::clone!(
+                                            #[weak]
+                                            window,
+                                            async move {
+                                                if let Err(e) = delete_recursive(f).await {
+                                                    window.show_toast(&format!(
+                                                        "Could not delete: {e}"
+                                                    ));
+                                                } else {
+                                                    window.reload();
+                                                }
+                                            }
+                                        ));
+                                    }
+                                ),
+                            );
+                            dialog.present(Some(&window));
+                            return;
+                        }
+                        Err(e) => {
+                            window.show_toast(&format!("Could not trash: {e}"));
+                            return;
+                        }
                     }
                 }
                 window.reload();
@@ -951,10 +999,8 @@ impl WrenWindow {
                         #[weak]
                         window,
                         async move {
-                            for file in &files {
-                                if let Err(e) =
-                                    file.delete_future(glib::Priority::DEFAULT).await
-                                {
+                            for file in files {
+                                if let Err(e) = delete_recursive(file).await {
                                     window.show_toast(&format!("Could not delete: {e}"));
                                     return;
                                 }
@@ -1058,17 +1104,12 @@ impl WrenWindow {
                         dest
                     };
 
-                    let (copy_fut, _) = file.copy_future(
-                        &dest,
-                        gio::FileCopyFlags::NONE,
-                        glib::Priority::DEFAULT,
-                    );
-                    if let Err(e) = copy_fut.await {
+                    if let Err(e) = copy_recursive(file.clone(), dest).await {
                         window.show_toast(&format!("Could not paste: {e}"));
                         return;
                     }
                     if is_cut {
-                        if let Err(e) = file.trash_future(glib::Priority::DEFAULT).await {
+                        if let Err(e) = delete_recursive(file.clone()).await {
                             window.show_toast(&format!("Could not move: {e}"));
                             return;
                         }
@@ -1653,6 +1694,85 @@ impl WrenWindow {
             app.set_window_size(w, h);
         }
     }
+}
+
+// ── Recursive file operation helpers ────────────────────────────────────────
+
+async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Error> {
+    let info = src
+        .query_info_future(
+            "standard::type",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            glib::Priority::DEFAULT,
+        )
+        .await?;
+
+    if info.file_type() == gio::FileType::Directory {
+        dest.make_directory_future(glib::Priority::DEFAULT).await?;
+
+        let enumerator = src
+            .enumerate_children_future(
+                "standard::name,standard::type",
+                gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                glib::Priority::DEFAULT,
+            )
+            .await?;
+
+        loop {
+            let children = enumerator
+                .next_files_future(30, glib::Priority::DEFAULT)
+                .await?;
+            if children.is_empty() {
+                break;
+            }
+            for child_info in children {
+                let name = child_info.name();
+                let child_src = src.child(&name);
+                let child_dest = dest.child(&name);
+                Box::pin(copy_recursive(child_src, child_dest)).await?;
+            }
+        }
+    } else {
+        let (fut, _) = src.copy_future(&dest, gio::FileCopyFlags::NONE, glib::Priority::DEFAULT);
+        fut.await?;
+    }
+    Ok(())
+}
+
+async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
+    let info = file
+        .query_info_future(
+            "standard::type",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            glib::Priority::DEFAULT,
+        )
+        .await?;
+
+    if info.file_type() == gio::FileType::Directory {
+        let enumerator = file
+            .enumerate_children_future(
+                "standard::name,standard::type",
+                gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                glib::Priority::DEFAULT,
+            )
+            .await?;
+
+        loop {
+            let children = enumerator
+                .next_files_future(30, glib::Priority::DEFAULT)
+                .await?;
+            if children.is_empty() {
+                break;
+            }
+            for child_info in children {
+                let child = file.child(child_info.name());
+                Box::pin(delete_recursive(child)).await?;
+            }
+        }
+    }
+
+    file.delete_future(glib::Priority::DEFAULT).await?;
+    Ok(())
 }
 
 fn format_file_size(bytes: u64) -> String {
