@@ -87,6 +87,7 @@ impl ObjectImpl for WrenBreadcrumbBar {
             #[weak]
             obj,
             move |_| {
+                obj.leave_edit_mode();
                 if let Some(win) = obj
                     .root()
                     .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
