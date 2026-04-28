@@ -63,6 +63,43 @@ impl ObjectImpl for WrenBreadcrumbBar {
             }
         ));
         self.path_entry.add_controller(key_ctrl);
+
+        // While the path entry has focus, disable the window-level clipboard
+        // actions so that Ctrl+C/X/V work natively in the entry rather than
+        // triggering file copy/cut/paste operations.
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        focus_ctrl.connect_enter(glib::clone!(
+            #[weak]
+            obj,
+            move |_| {
+                if let Some(win) = obj
+                    .root()
+                    .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
+                {
+                    win.action_set_enabled("win.copy", false);
+                    win.action_set_enabled("win.cut", false);
+                    win.action_set_enabled("win.paste", false);
+                    win.action_set_enabled("win.select-all", false);
+                }
+            }
+        ));
+        focus_ctrl.connect_leave(glib::clone!(
+            #[weak]
+            obj,
+            move |_| {
+                if let Some(win) = obj
+                    .root()
+                    .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
+                {
+                    win.action_set_enabled("win.copy", true);
+                    win.action_set_enabled("win.cut", true);
+                    win.action_set_enabled("win.paste", true);
+                    win.action_set_enabled("win.select-all", true);
+                    win.update_selection_actions();
+                }
+            }
+        ));
+        self.path_entry.add_controller(focus_ctrl);
     }
 
     fn dispose(&self) {

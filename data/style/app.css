@@ -81,6 +81,12 @@ button.wren-current-crumb:hover {
   padding: 2px 8px;
 }
 
+/* Keyboard shortcut labels in the shortcuts dialog */
+label.wren-kbd {
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
 /* ── List view rows ──────────────────────────────────────────────────────── */
 
 listview > row {
