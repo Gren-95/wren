@@ -163,43 +163,25 @@ impl WrenSidebar {
     }
 
     /// Update sidebar highlight to match the current directory.
+    /// Only exact matches are highlighted; navigating to a folder not in the
+    /// sidebar deselects everything (no ancestor/prefix matching).
     pub fn set_location(&self, file: &gio::File) {
         let imp = self.imp();
         let uris = imp.place_uris.borrow();
 
-        let mut best_idx: Option<i32> = None;
-        let mut best_depth: usize = 0;
-
-        for (i, uri) in uris.iter().enumerate() {
+        let match_idx = uris.iter().enumerate().find_map(|(i, uri)| {
             if uri.is_empty() {
-                continue;
+                return None;
             }
-            let bookmark = gio::File::for_uri(uri);
-            if file.equal(&bookmark) {
-                best_idx = Some(i as i32);
-                break;
+            if file.equal(&gio::File::for_uri(uri)) {
+                Some(i as i32)
+            } else {
+                None
             }
-            if file.has_prefix(&bookmark) {
-                let depth = bookmark
-                    .path()
-                    .map(|p| p.components().count())
-                    .unwrap_or(0);
-                if depth > best_depth {
-                    best_depth = depth;
-                    best_idx = Some(i as i32);
-                }
-            }
-        }
+        });
 
-        match best_idx {
-            Some(idx) => {
-                let row = imp.list_box.row_at_index(idx);
-                imp.list_box.select_row(row.as_ref());
-            }
-            None => {
-                imp.list_box.select_row(None::<&gtk4::ListBoxRow>);
-            }
-        }
+        let row = match_idx.and_then(|idx| imp.list_box.row_at_index(idx));
+        imp.list_box.select_row(row.as_ref());
     }
 
     fn build_place_row(label: &str, icon_name: &str) -> gtk4::ListBoxRow {
