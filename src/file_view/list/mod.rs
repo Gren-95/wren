@@ -182,6 +182,25 @@ impl WrenFileList {
             }
         });
     }
+
+    pub fn set_sort_state(&self, key: &str, reversed: bool) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let buttons = imp.sort_buttons.borrow();
+        let col_keys = ["name", "type", "size", "date"];
+        let col_labels = ["Name", "Type", "Size", "Modified"];
+        for (i, (btn_key, btn_label)) in col_keys.iter().zip(col_labels.iter()).enumerate() {
+            if let Some(btn) = buttons.get(i) {
+                if *btn_key == key {
+                    let arrow = if reversed { " ↑" } else { " ↓" };
+                    btn.set_label(&format!("{}{}", btn_label, arrow));
+                    btn.add_css_class("wren-sort-active");
+                } else {
+                    btn.set_label(btn_label);
+                    btn.remove_css_class("wren-sort-active");
+                }
+            }
+        }
+    }
 }
 
 mod imp {
@@ -192,6 +211,7 @@ mod imp {
         pub list_view: gtk4::ListView,
         pub cut_uris: Rc<RefCell<HashSet<String>>>,
         pub show_extensions: Cell<bool>,
+        pub sort_buttons: RefCell<Vec<gtk4::Button>>,
     }
 
     impl Default for WrenFileList {
@@ -200,6 +220,7 @@ mod imp {
                 list_view: Default::default(),
                 cut_uris: Rc::new(RefCell::new(HashSet::new())),
                 show_extensions: Cell::new(true),
+                sort_buttons: RefCell::new(Vec::new()),
             }
         }
     }
@@ -228,13 +249,57 @@ mod imp {
             self.list_view.set_hexpand(true);
             self.list_view.set_overflow(gtk4::Overflow::Hidden);
 
+            // ── Column header row ─────────────────────────────────────────
+            let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            header_box.add_css_class("wren-list-header");
+            header_box.set_margin_start(8);
+            header_box.set_margin_end(8);
+
+            // Spacer to align with icon (24px) + spacing (8px) in each row
+            let icon_spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            icon_spacer.set_size_request(32, -1);
+            header_box.append(&icon_spacer);
+
+            // (label, sort_key, hexpand, width_request)
+            let cols: &[(&str, &str, bool, i32)] = &[
+                ("Name",     "name", true,  -1),
+                ("Type",     "type", false, 120),
+                ("Size",     "size", false, 80),
+                ("Modified", "date", false, 120),
+            ];
+
+            let mut sort_buttons = self.sort_buttons.borrow_mut();
+            for &(label, key, expand, width) in cols {
+                let btn = gtk4::Button::with_label(label);
+                btn.add_css_class("flat");
+                if expand {
+                    btn.set_hexpand(true);
+                } else {
+                    btn.set_width_request(width);
+                }
+                let key = key.to_string();
+                btn.connect_clicked(move |btn| {
+                    let _ = btn.activate_action(
+                        "win.set-sort-key",
+                        Some(&key.to_variant()),
+                    );
+                });
+                header_box.append(&btn);
+                sort_buttons.push(btn);
+            }
+            drop(sort_buttons);
+
             let scrolled = gtk4::ScrolledWindow::new();
             scrolled.set_child(Some(&self.list_view));
             scrolled.set_vexpand(true);
             scrolled.set_hexpand(true);
             scrolled.set_kinetic_scrolling(true);
             scrolled.set_overflow(gtk4::Overflow::Hidden);
-            scrolled.set_parent(&*self.obj());
+
+            let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            vbox.append(&header_box);
+            vbox.append(&scrolled);
+            vbox.set_parent(&*self.obj());
         }
 
         fn dispose(&self) {

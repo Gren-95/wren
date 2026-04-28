@@ -100,6 +100,7 @@ impl WrenWindow {
             let sort_key = crate::model::SortKey::from_str(&app.sort_key());
             tab.sort_key = sort_key;
             tab.sort_reversed = app.sort_reversed();
+            tab.file_list.set_sort_state(sort_key.as_str(), tab.sort_reversed);
         }
 
         let page = imp.tab_view.append(&tab.content_widget);
@@ -196,6 +197,7 @@ impl WrenWindow {
 
         self.update_nav_buttons();
         self.update_selection_actions();
+        self.update_list_sort_headers();
     }
 
     // ── Navigation ───────────────────────────────────────────────────────────
@@ -443,7 +445,9 @@ impl WrenWindow {
         let imp = self.imp();
         let current = imp.zoom_level.get();
         if current < 5 {
-            imp.zoom_level.set(current + 1);
+            let new_level = current + 1;
+            imp.zoom_level.set(new_level);
+            imp.zoom_adjustment.set_value(new_level as f64);
             self.apply_zoom();
             self.save_zoom();
         }
@@ -453,14 +457,18 @@ impl WrenWindow {
         let imp = self.imp();
         let current = imp.zoom_level.get();
         if current > 1 {
-            imp.zoom_level.set(current - 1);
+            let new_level = current - 1;
+            imp.zoom_level.set(new_level);
+            imp.zoom_adjustment.set_value(new_level as f64);
             self.apply_zoom();
             self.save_zoom();
         }
     }
 
     pub fn zoom_reset(&self) {
-        self.imp().zoom_level.set(3);
+        let imp = self.imp();
+        imp.zoom_level.set(3);
+        imp.zoom_adjustment.set_value(3.0);
         self.apply_zoom();
         self.save_zoom();
     }
@@ -495,23 +503,36 @@ impl WrenWindow {
     // ── Sort ─────────────────────────────────────────────────────────────────
 
     pub fn set_sort_key(&self, key_str: &str) {
-        let Some(idx) = self.current_tab_index() else {
-            return;
-        };
+        let Some(idx) = self.current_tab_index() else { return };
         let key = SortKey::from_str(key_str);
+        let new_reversed;
         {
             let mut tabs = self.imp().tabs.borrow_mut();
-            if let Some(tab) = tabs.get_mut(idx) {
+            let Some(tab) = tabs.get_mut(idx) else { return };
+            if tab.sort_key == key {
+                tab.sort_reversed = !tab.sort_reversed;
+            } else {
                 tab.sort_key = key;
+                tab.sort_reversed = false;
             }
+            new_reversed = tab.sort_reversed;
+        }
+        if let Some(a) = self
+            .lookup_action("toggle-sort-reversed")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            a.set_state(&new_reversed.to_variant());
         }
         self.apply_sort();
+        self.update_list_sort_headers();
+        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
+            app.set_sort_key_pref(key_str);
+            app.set_sort_reversed_pref(new_reversed);
+        }
     }
 
     pub fn set_sort_reversed(&self, reversed: bool) {
-        let Some(idx) = self.current_tab_index() else {
-            return;
-        };
+        let Some(idx) = self.current_tab_index() else { return };
         {
             let mut tabs = self.imp().tabs.borrow_mut();
             if let Some(tab) = tabs.get_mut(idx) {
@@ -519,6 +540,15 @@ impl WrenWindow {
             }
         }
         self.apply_sort();
+        self.update_list_sort_headers();
+    }
+
+    fn update_list_sort_headers(&self) {
+        let Some(idx) = self.current_tab_index() else { return };
+        let tabs = self.imp().tabs.borrow();
+        if let Some(tab) = tabs.get(idx) {
+            tab.file_list.set_sort_state(tab.sort_key.as_str(), tab.sort_reversed);
+        }
     }
 
     fn apply_sort(&self) {
@@ -1432,6 +1462,44 @@ impl WrenWindow {
         page.set_title("General");
         page.set_icon_name(Some("preferences-other-symbolic"));
 
+        // Appearance group
+        let appearance_group = adw::PreferencesGroup::new();
+        appearance_group.set_title("Appearance");
+
+        let scheme_row = adw::ComboRow::new();
+        scheme_row.set_title("Color Scheme");
+        let options = gtk4::StringList::new(&["Follow System", "Light", "Dark"]);
+        scheme_row.set_model(Some(&options));
+        let current_scheme = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.color_scheme())
+            .unwrap_or_default();
+        let initial_idx = match current_scheme.as_str() {
+            "light" => 1u32,
+            "dark"  => 2u32,
+            _       => 0u32,
+        };
+        scheme_row.set_selected(initial_idx);
+        scheme_row.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let (scheme_str, adw_scheme) = match row.selected() {
+                    1 => ("light", adw::ColorScheme::ForceLight),
+                    2 => ("dark",  adw::ColorScheme::ForceDark),
+                    _ => ("default", adw::ColorScheme::Default),
+                };
+                adw::StyleManager::default().set_color_scheme(adw_scheme);
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_color_scheme_pref(scheme_str);
+                }
+            }
+        ));
+        appearance_group.add(&scheme_row);
+        page.add(&appearance_group);
+
+        // Terminal group
         let group = adw::PreferencesGroup::new();
         group.set_title("Terminal");
         group.set_description(Some(

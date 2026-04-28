@@ -16,6 +16,7 @@ pub struct WrenApplication {
     pub sort_reversed: Cell<bool>,
     pub window_width: Cell<i32>,
     pub window_height: Cell<i32>,
+    pub color_scheme: RefCell<String>,
 }
 
 impl Default for WrenApplication {
@@ -30,6 +31,7 @@ impl Default for WrenApplication {
             sort_reversed: Cell::new(false),
             window_width: Cell::new(1000),
             window_height: Cell::new(700),
+            color_scheme: RefCell::new("default".to_string()),
         }
     }
 }
@@ -76,6 +78,12 @@ impl WrenApplication {
             if let Ok(v) = kf.integer("Window", "height") {
                 if v > 0 { self.window_height.set(v); }
             }
+            if let Ok(v) = kf.string("Appearance", "color_scheme") {
+                let s = v.to_string();
+                if matches!(s.as_str(), "default" | "light" | "dark") {
+                    *self.color_scheme.borrow_mut() = s;
+                }
+            }
         }
     }
 
@@ -95,6 +103,7 @@ impl WrenApplication {
         kf.set_boolean("Sort", "reversed", self.sort_reversed.get());
         kf.set_integer("Window", "width", self.window_width.get());
         kf.set_integer("Window", "height", self.window_height.get());
+        kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }
@@ -128,6 +137,13 @@ impl ApplicationImpl for WrenApplication {
         self.parent_startup();
         self.load_settings();
         let app = self.obj();
+
+        let scheme = match self.color_scheme.borrow().as_str() {
+            "light" => adw::ColorScheme::ForceLight,
+            "dark"  => adw::ColorScheme::ForceDark,
+            _       => adw::ColorScheme::Default,
+        };
+        adw::StyleManager::default().set_color_scheme(scheme);
 
         let provider = gtk4::CssProvider::new();
         provider.load_from_resource("/io/github/wren/style/app.css");

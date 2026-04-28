@@ -40,9 +40,8 @@ gridview > child {
 
 /* Ancestor segment buttons */
 button.wren-breadcrumb {
-  padding: 2px 8px;
+  padding: 5px 10px;
   border-radius: 9999px;
-  min-height: 0;
   min-width: 0;
   font-size: 0.9em;
   transition: background-color 100ms ease;
@@ -61,9 +60,8 @@ label.wren-crumb-sep {
 
 /* Current directory — accent chip, clicking enters edit mode */
 button.wren-current-crumb {
-  padding: 2px 10px;
+  padding: 5px 12px;
   border-radius: 9999px;
-  min-height: 0;
   min-width: 0;
   font-size: 0.9em;
   font-weight: 600;
@@ -79,8 +77,7 @@ button.wren-current-crumb:hover {
 /* Path entry (Ctrl+L / clicking current crumb) */
 .wren-path-entry {
   border-radius: 9999px;
-  min-height: 0;
-  padding: 2px 8px;
+  padding: 5px 10px;
 }
 
 /* Keyboard shortcut labels in the shortcuts dialog */
@@ -98,4 +95,28 @@ listview > row {
 
 listview > row:selected {
   background-color: alpha(@accent_color, 0.15);
+}
+
+/* ── List view column headers ────────────────────────────────────────────── */
+
+.wren-list-header {
+  border-bottom: 1px solid alpha(currentColor, 0.1);
+}
+
+.wren-list-header button {
+  border-radius: 0;
+  padding: 4px 6px;
+  min-height: 0;
+  font-size: 0.85em;
+  color: alpha(currentColor, 0.7);
+}
+
+.wren-list-header button:hover {
+  color: currentColor;
+  background-color: alpha(currentColor, 0.06);
+}
+
+.wren-list-header button.wren-sort-active {
+  color: @accent_color;
+  font-weight: 600;
 }

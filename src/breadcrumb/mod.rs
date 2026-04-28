@@ -46,10 +46,7 @@ impl WrenBreadcrumbBar {
         for (i, ancestor) in ancestors.into_iter().enumerate() {
             let is_last = i == total - 1;
 
-            let name = ancestor
-                .basename()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| "/".to_string());
+            let name = friendly_name_for(&ancestor);
 
             if is_last {
                 // Current directory — accent chip, click enters edit mode
@@ -165,4 +162,20 @@ impl WrenBreadcrumbBar {
             win.navigate_to(file);
         }
     }
+}
+
+fn friendly_name_for(file: &gio::File) -> String {
+    let uri = file.uri();
+    if uri == "trash:///" {
+        return "Trash".to_string();
+    }
+    if uri == "network:///" {
+        return "Network".to_string();
+    }
+    if uri == "recent:///" {
+        return "Recent".to_string();
+    }
+    file.basename()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string())
 }

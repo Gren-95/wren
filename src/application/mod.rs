@@ -44,6 +44,12 @@ impl WrenApplication {
     pub fn sort_reversed(&self) -> bool { self.imp().sort_reversed.get() }
     pub fn set_sort_reversed_pref(&self, v: bool) { self.imp().sort_reversed.set(v); self.imp().save_settings(); }
 
+    pub fn color_scheme(&self) -> String { self.imp().color_scheme.borrow().clone() }
+    pub fn set_color_scheme_pref(&self, v: &str) {
+        *self.imp().color_scheme.borrow_mut() = v.to_string();
+        self.imp().save_settings();
+    }
+
     pub fn window_size(&self) -> (i32, i32) {
         (self.imp().window_width.get(), self.imp().window_height.get())
     }

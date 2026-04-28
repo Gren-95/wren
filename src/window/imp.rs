@@ -49,6 +49,7 @@ pub struct WrenWindow {
     pub show_hidden: Cell<bool>,
     pub show_extensions: Cell<bool>,
     pub zoom_level: Cell<i32>,
+    pub zoom_adjustment: gtk4::Adjustment,
     pub undo_stack: RefCell<Vec<UndoOp>>,
     pub redo_stack: RefCell<Vec<UndoOp>>,
 }
@@ -76,6 +77,7 @@ impl Default for WrenWindow {
             show_hidden: Default::default(),
             show_extensions: Cell::new(true),
             zoom_level: Cell::new(3),
+            zoom_adjustment: gtk4::Adjustment::new(3.0, 1.0, 5.0, 1.0, 1.0, 0.0),
             undo_stack: Default::default(),
             redo_stack: Default::default(),
         }
@@ -380,6 +382,13 @@ impl ObjectImpl for WrenWindow {
         // Hamburger menu
         let hamburger = gio::Menu::new();
 
+        // Custom zoom slider section (widget embedded via PopoverMenu::add_child)
+        let zoom_section = gio::Menu::new();
+        let zoom_item = gio::MenuItem::new(None, None);
+        zoom_item.set_attribute_value("custom", Some(&"zoom-controls".to_variant()));
+        zoom_section.append_item(&zoom_item);
+        hamburger.append_section(None, &zoom_section);
+
         let view_section = gio::Menu::new();
         view_section.append(Some("Show Hidden Files"), Some("win.toggle-hidden"));
         view_section.append(Some("Show File Extensions"), Some("win.toggle-extensions"));
@@ -425,6 +434,60 @@ impl ObjectImpl for WrenWindow {
 
         obj.imp().menu_button.set_menu_model(Some(&hamburger));
 
+        // Embed the zoom slider into the hamburger PopoverMenu
+        if let Some(popover) = obj
+            .imp()
+            .menu_button
+            .popover()
+            .and_downcast::<gtk4::PopoverMenu>()
+        {
+            let zoom_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+            zoom_box.set_margin_top(6);
+            zoom_box.set_margin_bottom(6);
+            zoom_box.set_margin_start(12);
+            zoom_box.set_margin_end(12);
+
+            let zoom_out = gtk4::Button::from_icon_name("zoom-out-symbolic");
+            zoom_out.set_action_name(Some("win.zoom-out"));
+            zoom_out.add_css_class("flat");
+            zoom_out.add_css_class("circular");
+            zoom_out.set_valign(gtk4::Align::Center);
+
+            let zoom_scale = gtk4::Scale::new(
+                gtk4::Orientation::Horizontal,
+                Some(&self.zoom_adjustment),
+            );
+            zoom_scale.set_hexpand(true);
+            zoom_scale.set_draw_value(false);
+            zoom_scale.set_width_request(140);
+            zoom_scale.set_round_digits(0);
+
+            let zoom_in = gtk4::Button::from_icon_name("zoom-in-symbolic");
+            zoom_in.set_action_name(Some("win.zoom-in"));
+            zoom_in.add_css_class("flat");
+            zoom_in.add_css_class("circular");
+            zoom_in.set_valign(gtk4::Align::Center);
+
+            zoom_box.append(&zoom_out);
+            zoom_box.append(&zoom_scale);
+            zoom_box.append(&zoom_in);
+
+            self.zoom_adjustment.connect_value_changed(glib::clone!(
+                #[weak]
+                obj,
+                move |adj| {
+                    let level = adj.value().round() as i32;
+                    if level != obj.imp().zoom_level.get() {
+                        obj.imp().zoom_level.set(level);
+                        obj.apply_zoom();
+                        obj.save_zoom();
+                    }
+                }
+            ));
+
+            popover.add_child(&zoom_box, "zoom-controls");
+        }
+
         // Restore persisted settings
         if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
             let (w, h) = app.window_size();
@@ -438,7 +501,9 @@ impl ObjectImpl for WrenWindow {
             {
                 action.set_state(&show_ext.to_variant());
             }
-            obj.imp().zoom_level.set(app.zoom_level());
+            let zl = app.zoom_level();
+            obj.imp().zoom_level.set(zl);
+            obj.imp().zoom_adjustment.set_value(zl as f64);
         }
 
         // Sidebar toggle button — keep split_view and button in sync
