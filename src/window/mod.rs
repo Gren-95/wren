@@ -1571,7 +1571,23 @@ impl WrenWindow {
             self.show_toast("Cannot open terminal: not a local path");
             return;
         };
+        if !self.launch_terminal_at(&path) {
+            self.show_toast("No terminal application found");
+        }
+    }
 
+    pub fn open_terminal_at_uri(&self, uri: &str) {
+        let file = gio::File::for_uri(uri);
+        let Some(path) = file.path() else {
+            self.show_toast("Cannot open terminal: not a local path");
+            return;
+        };
+        if !self.launch_terminal_at(&path) {
+            self.show_toast("No terminal application found");
+        }
+    }
+
+    fn launch_terminal_at(&self, path: &std::path::Path) -> bool {
         let known: &[(&str, &[&str])] = &[
             ("kgx", &["--working-directory"]),
             ("gnome-terminal", &["--working-directory"]),
@@ -1589,19 +1605,16 @@ impl WrenWindow {
                     for arg in *wd_args {
                         c.arg(arg);
                     }
-                    c.arg(&path);
+                    c.arg(path);
                     return c.spawn().is_ok();
                 }
             }
             let mut c = std::process::Command::new(cmd);
-            c.arg("--working-directory").arg(&path);
+            c.arg("--working-directory").arg(path);
             if c.spawn().is_ok() {
                 return true;
             }
-            std::process::Command::new(cmd)
-                .arg(&path)
-                .spawn()
-                .is_ok()
+            std::process::Command::new(cmd).arg(path).spawn().is_ok()
         };
 
         let custom = self
@@ -1610,7 +1623,7 @@ impl WrenWindow {
             .map(|a| a.terminal_cmd())
             .unwrap_or_default();
         if !custom.is_empty() && try_terminal(&custom) {
-            return;
+            return true;
         }
 
         for (cmd, wd_args) in known {
@@ -1618,12 +1631,12 @@ impl WrenWindow {
             for arg in *wd_args {
                 c.arg(arg);
             }
-            c.arg(&path);
+            c.arg(path);
             if c.spawn().is_ok() {
-                return;
+                return true;
             }
         }
-        self.show_toast("No terminal application found");
+        false
     }
 
     // ── Undo / Redo ──────────────────────────────────────────────────────────

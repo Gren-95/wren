@@ -69,7 +69,11 @@ impl WrenSidebar {
 
         for (label, icon, uri_fn) in places {
             let uri = uri_fn();
-            list.append(&Self::build_place_row(label, icon));
+            let row = Self::build_place_row(label, icon);
+            if !uri.is_empty() {
+                Self::attach_sidebar_context_menu(&row, &uri, false);
+            }
+            list.append(&row);
             uris.push(uri);
         }
 
@@ -163,21 +167,41 @@ impl WrenSidebar {
                         .unwrap_or_else(|| uri.clone())
                 };
                 let row = Self::build_place_row(&display, "folder-symbolic");
-                Self::attach_bookmark_context_menu(&row, uri);
+                Self::attach_sidebar_context_menu(&row, uri, true);
                 list.append(&row);
                 imp.place_uris.borrow_mut().push(uri.clone());
             }
         }
     }
 
-    fn attach_bookmark_context_menu(row: &gtk4::ListBoxRow, uri: &str) {
+    fn attach_sidebar_context_menu(row: &gtk4::ListBoxRow, uri: &str, is_bookmark: bool) {
         let menu = gio::Menu::new();
-        let item = gio::MenuItem::new(Some("Remove Bookmark"), None);
-        item.set_action_and_target_value(
-            Some("win.remove-bookmark"),
+
+        let open_section = gio::Menu::new();
+        let tab_item = gio::MenuItem::new(Some("Open in New Tab"), None);
+        tab_item.set_action_and_target_value(
+            Some("win.open-tab-at"),
             Some(&uri.to_variant()),
         );
-        menu.append_item(&item);
+        open_section.append_item(&tab_item);
+        let term_item = gio::MenuItem::new(Some("Open in Terminal"), None);
+        term_item.set_action_and_target_value(
+            Some("win.open-terminal-at"),
+            Some(&uri.to_variant()),
+        );
+        open_section.append_item(&term_item);
+        menu.append_section(None, &open_section);
+
+        if is_bookmark {
+            let bm_section = gio::Menu::new();
+            let remove_item = gio::MenuItem::new(Some("Remove Bookmark"), None);
+            remove_item.set_action_and_target_value(
+                Some("win.remove-bookmark"),
+                Some(&uri.to_variant()),
+            );
+            bm_section.append_item(&remove_item);
+            menu.append_section(None, &bm_section);
+        }
 
         let popover = gtk4::PopoverMenu::from_model(Some(&menu));
         popover.set_has_arrow(false);
@@ -213,7 +237,9 @@ impl WrenSidebar {
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "drive-harddisk-symbolic".to_string());
                 let uri = mount.root().uri().to_string();
-                list.append(&Self::build_place_row(&name, &icon_name));
+                let row = Self::build_place_row(&name, &icon_name);
+                Self::attach_sidebar_context_menu(&row, &uri, false);
+                list.append(&row);
                 imp.place_uris.borrow_mut().push(uri);
             }
         }

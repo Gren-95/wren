@@ -215,6 +215,24 @@ impl ObjectSubclass for WrenWindow {
                 }
             },
         );
+        klass.install_action(
+            "win.open-tab-at",
+            Some(glib::VariantTy::STRING),
+            |win, _, param| {
+                if let Some(uri) = param.and_then(|v| v.str()) {
+                    win.add_tab(gio::File::for_uri(uri));
+                }
+            },
+        );
+        klass.install_action(
+            "win.open-terminal-at",
+            Some(glib::VariantTy::STRING),
+            |win, _, param| {
+                if let Some(uri) = param.and_then(|v| v.str()) {
+                    win.open_terminal_at_uri(uri);
+                }
+            },
+        );
     }
 
     fn instance_init(obj: &InitializingObject<Self>) {
