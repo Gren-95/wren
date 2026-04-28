@@ -1890,6 +1890,28 @@ impl WrenWindow {
         ));
     }
 
+    pub fn remove_bookmark(&self, uri: &str) {
+        let bookmarks_path = {
+            let mut p = glib::home_dir();
+            p.push(".config");
+            p.push("gtk-3.0");
+            p.push("bookmarks");
+            p
+        };
+        let content = std::fs::read_to_string(&bookmarks_path).unwrap_or_default();
+        let new_content: String = content
+            .lines()
+            .filter(|line| line.split_whitespace().next() != Some(uri))
+            .flat_map(|line| [line, "\n"])
+            .collect();
+        if let Err(e) = std::fs::write(&bookmarks_path, &new_content) {
+            self.show_toast(&format!("Could not remove bookmark: {e}"));
+            return;
+        }
+        self.show_toast("Bookmark removed");
+        self.imp().sidebar.reload_bookmarks();
+    }
+
     pub fn save_window_size(&self) {
         let (w, h) = self.default_size();
         if let Some(app) = self.application().and_downcast::<WrenApplication>() {

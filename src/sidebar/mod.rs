@@ -162,10 +162,36 @@ impl WrenSidebar {
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_else(|| uri.clone())
                 };
-                list.append(&Self::build_place_row(&display, "folder-symbolic"));
+                let row = Self::build_place_row(&display, "folder-symbolic");
+                Self::attach_bookmark_context_menu(&row, uri);
+                list.append(&row);
                 imp.place_uris.borrow_mut().push(uri.clone());
             }
         }
+    }
+
+    fn attach_bookmark_context_menu(row: &gtk4::ListBoxRow, uri: &str) {
+        let menu = gio::Menu::new();
+        let item = gio::MenuItem::new(Some("Remove Bookmark"), None);
+        item.set_action_and_target_value(
+            Some("win.remove-bookmark"),
+            Some(&uri.to_variant()),
+        );
+        menu.append_item(&item);
+
+        let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+        popover.set_has_arrow(false);
+        popover.set_parent(row);
+
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(3);
+        gesture.connect_pressed(move |_, _, x, y| {
+            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+                x as i32, y as i32, 1, 1,
+            )));
+            popover.popup();
+        });
+        row.add_controller(gesture);
     }
 
     fn append_volumes_section(&self) {

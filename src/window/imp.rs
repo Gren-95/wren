@@ -204,6 +204,15 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action("win.show-shortcuts", None, |win, _, _| {
             win.show_shortcuts();
         });
+        klass.install_action(
+            "win.remove-bookmark",
+            Some(glib::VariantTy::STRING),
+            |win, _, param| {
+                if let Some(uri) = param.and_then(|v| v.str()) {
+                    win.remove_bookmark(uri);
+                }
+            },
+        );
     }
 
     fn instance_init(obj: &InitializingObject<Self>) {
