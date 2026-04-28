@@ -90,6 +90,8 @@ impl WrenWindow {
         tab.file_list.setup_drag_source();
         tab.file_grid.setup_empty_area_click();
         tab.file_list.setup_empty_area_click();
+        tab.file_grid.set_show_extensions(imp.show_extensions.get());
+        tab.file_list.set_show_extensions(imp.show_extensions.get());
 
         // Restore persisted view mode and sort for new tabs
         if let Some(app) = self.application().and_downcast::<WrenApplication>() {
@@ -579,6 +581,16 @@ impl WrenWindow {
                 }
             }
         ));
+    }
+
+    pub fn apply_extensions_setting(&self) {
+        let imp = self.imp();
+        let show = imp.show_extensions.get();
+        let tabs = imp.tabs.borrow();
+        for tab in tabs.iter() {
+            tab.file_grid.set_show_extensions(show);
+            tab.file_list.set_show_extensions(show);
+        }
     }
 
     pub fn apply_hidden_filter(&self) {
@@ -1859,6 +1871,24 @@ impl WrenWindow {
     }
 
     // ── Window size persistence ───────────────────────────────────────────────
+
+    pub fn setup_volume_monitor(&self) {
+        let monitor = gio::VolumeMonitor::get();
+        monitor.connect_mount_added(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_, _| {
+                win.imp().sidebar.reload_volumes();
+            }
+        ));
+        monitor.connect_mount_removed(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_, _| {
+                win.imp().sidebar.reload_volumes();
+            }
+        ));
+    }
 
     pub fn save_window_size(&self) {
         let (w, h) = self.default_size();

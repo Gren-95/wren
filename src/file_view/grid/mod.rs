@@ -25,6 +25,7 @@ impl Default for WrenFileGrid {
 fn make_cell_factory(
     icon_size: u32,
     cut_uris: Rc<RefCell<HashSet<String>>>,
+    show_extensions: bool,
 ) -> gtk4::SignalListItemFactory {
     let factory = gtk4::SignalListItemFactory::new();
     factory.connect_setup(|_, obj| {
@@ -42,7 +43,7 @@ fn make_cell_factory(
             .and_downcast::<WrenFileCell>()
             .expect("child must be WrenFileCell");
         let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
-        cell.bind(&file_obj, icon_size);
+        cell.bind(&file_obj, icon_size, show_extensions);
         if is_cut {
             cell.set_opacity(0.5);
         }
@@ -73,8 +74,11 @@ impl WrenFileGrid {
     pub fn set_icon_size(&self, icon_size: u32) {
         let imp = imp::WrenFileGrid::from_obj(self);
         imp.current_icon_size.set(icon_size);
-        imp.grid_view
-            .set_factory(Some(&make_cell_factory(icon_size, Rc::clone(&imp.cut_uris))));
+        imp.grid_view.set_factory(Some(&make_cell_factory(
+            icon_size,
+            Rc::clone(&imp.cut_uris),
+            imp.show_extensions.get(),
+        )));
     }
 
     pub fn set_cut_uris(&self, uris: &[String]) {
@@ -84,8 +88,21 @@ impl WrenFileGrid {
         set.extend(uris.iter().cloned());
         drop(set);
         let icon_size = imp.current_icon_size.get();
-        imp.grid_view
-            .set_factory(Some(&make_cell_factory(icon_size, Rc::clone(&imp.cut_uris))));
+        imp.grid_view.set_factory(Some(&make_cell_factory(
+            icon_size,
+            Rc::clone(&imp.cut_uris),
+            imp.show_extensions.get(),
+        )));
+    }
+
+    pub fn set_show_extensions(&self, show: bool) {
+        let imp = imp::WrenFileGrid::from_obj(self);
+        imp.show_extensions.set(show);
+        imp.grid_view.set_factory(Some(&make_cell_factory(
+            imp.current_icon_size.get(),
+            Rc::clone(&imp.cut_uris),
+            show,
+        )));
     }
 
     pub fn setup_drag_source(&self) {
@@ -184,6 +201,7 @@ mod imp {
         pub grid_view: gtk4::GridView,
         pub current_icon_size: Cell<u32>,
         pub cut_uris: Rc<RefCell<HashSet<String>>>,
+        pub show_extensions: Cell<bool>,
     }
 
     impl Default for WrenFileGrid {
@@ -192,6 +210,7 @@ mod imp {
                 grid_view: Default::default(),
                 current_icon_size: Cell::new(64),
                 cut_uris: Rc::new(RefCell::new(HashSet::new())),
+                show_extensions: Cell::new(true),
             }
         }
     }
@@ -214,6 +233,7 @@ mod imp {
             self.grid_view.set_factory(Some(&super::make_cell_factory(
                 64,
                 Rc::clone(&self.cut_uris),
+                true,
             )));
             self.grid_view.set_min_columns(2);
             self.grid_view.set_max_columns(16);

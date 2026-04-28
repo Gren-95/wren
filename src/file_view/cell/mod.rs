@@ -70,6 +70,17 @@ fn cached_texture(path: &PathBuf, px: i32) -> Option<gtk4::gdk::Texture> {
     })
 }
 
+fn strip_extension(name: &str) -> String {
+    // Don't strip the leading dot from hidden files (.bashrc → keep as-is)
+    if name.starts_with('.') {
+        return name.to_string();
+    }
+    match name.rfind('.') {
+        Some(pos) if pos > 0 => name[..pos].to_string(),
+        _ => name.to_string(),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl WrenFileCell {
@@ -81,10 +92,15 @@ impl WrenFileCell {
         imp::WrenFileCell::from_obj(self)
     }
 
-    pub fn bind(&self, file_obj: &FileObject, icon_size: u32) {
+    pub fn bind(&self, file_obj: &FileObject, icon_size: u32, show_extension: bool) {
         let imp = self.imp();
         let px = icon_size as i32;
-        imp.name.set_label(&file_obj.name());
+        let display_name = if show_extension {
+            file_obj.name()
+        } else {
+            strip_extension(&file_obj.name())
+        };
+        imp.name.set_label(&display_name);
 
         let mut thumb_loaded = false;
         if let Some(thumb_path) = file_obj.thumbnail_path() {

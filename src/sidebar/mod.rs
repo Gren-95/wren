@@ -97,32 +97,37 @@ impl WrenSidebar {
             }
         }
 
-        *imp.place_uris.borrow_mut() = uris.clone();
+        *imp.place_uris.borrow_mut() = uris;
 
-        list.connect_row_activated(move |list_box, row| {
-            let idx = row.index() as usize;
-            if let Some(uri) = uris.get(idx) {
-                if uri.is_empty() {
-                    return;
-                }
-                let file = gio::File::for_uri(uri);
-                if let Some(window) = row
-                    .root()
-                    .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
-                {
-                    list_box.select_row(None::<&gtk4::ListBoxRow>);
-                    window.navigate_to(file);
+        list.connect_row_activated(glib::clone!(
+            #[weak(rename_to = sidebar)]
+            self,
+            move |_, row| {
+                let idx = row.index() as usize;
+                let uri = sidebar.imp().place_uris.borrow().get(idx).cloned();
+                if let Some(uri) = uri {
+                    if uri.is_empty() {
+                        return;
+                    }
+                    if let Some(win) = row
+                        .root()
+                        .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
+                    {
+                        win.navigate_to(gio::File::for_uri(&uri));
+                    }
                 }
             }
-        });
+        ));
+
+        self.reload_volumes();
     }
 
-    /// Re-read bookmarks from disk and update the rows below the static places.
-    pub fn reload_bookmarks(&self) {
+    /// Rebuild the Devices section from currently mounted volumes.
+    pub fn reload_volumes(&self) {
         let imp = self.imp();
         let list = &imp.list_box;
 
-        // Remove all rows beyond the static places
+        // Remove everything after n_static_rows (bookmarks + old devices)
         let n_static = imp.n_static_rows.get();
         loop {
             match list.row_at_index(n_static) {
@@ -131,20 +136,23 @@ impl WrenSidebar {
             }
         }
 
-        // Rebuild URI list from scratch (keeps static entries intact)
-        let mut uris: Vec<String> = imp
-            .place_uris
-            .borrow()
-            .iter()
-            .take(n_static as usize)
-            .cloned()
-            .collect();
+        // Trim place_uris back to static entries
+        {
+            let mut uris = imp.place_uris.borrow_mut();
+            uris.truncate(n_static as usize);
+        }
 
+        self.append_bookmarks_section();
+        self.append_volumes_section();
+    }
+
+    fn append_bookmarks_section(&self) {
+        let imp = self.imp();
+        let list = &imp.list_box;
         let bookmarks = read_gtk_bookmarks();
         if !bookmarks.is_empty() {
             list.append(&Self::build_header_row("Bookmarks"));
-            uris.push(String::new());
-
+            imp.place_uris.borrow_mut().push(String::new());
             for (uri, label) in &bookmarks {
                 let display = if !label.is_empty() {
                     label.clone()
@@ -155,11 +163,39 @@ impl WrenSidebar {
                         .unwrap_or_else(|| uri.clone())
                 };
                 list.append(&Self::build_place_row(&display, "folder-symbolic"));
-                uris.push(uri.clone());
+                imp.place_uris.borrow_mut().push(uri.clone());
             }
         }
+    }
 
-        *imp.place_uris.borrow_mut() = uris;
+    fn append_volumes_section(&self) {
+        let imp = self.imp();
+        let list = &imp.list_box;
+        let monitor = gio::VolumeMonitor::get();
+        let mounts: Vec<gio::Mount> = monitor.mounts();
+
+        if !mounts.is_empty() {
+            list.append(&Self::build_header_row("Devices"));
+            imp.place_uris.borrow_mut().push(String::new());
+            for mount in &mounts {
+                let name = mount.name().to_string();
+                let icon_name = mount
+                    .icon()
+                    .downcast::<gio::ThemedIcon>()
+                    .ok()
+                    .and_then(|ti| ti.names().into_iter().next())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "drive-harddisk-symbolic".to_string());
+                let uri = mount.root().uri().to_string();
+                list.append(&Self::build_place_row(&name, &icon_name));
+                imp.place_uris.borrow_mut().push(uri);
+            }
+        }
+    }
+
+    /// Re-read bookmarks and volumes, rebuilding all dynamic sidebar rows.
+    pub fn reload_bookmarks(&self) {
+        self.reload_volumes();
     }
 
     /// Update sidebar highlight to match the current directory.

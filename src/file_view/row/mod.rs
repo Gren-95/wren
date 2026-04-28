@@ -26,9 +26,14 @@ impl WrenFileRow {
         imp::WrenFileRow::from_obj(self)
     }
 
-    pub fn bind(&self, file_obj: &FileObject) {
+    pub fn bind(&self, file_obj: &FileObject, show_extension: bool) {
         let imp = self.imp();
-        imp.name.set_label(&file_obj.name());
+        let display_name = if show_extension {
+            file_obj.name()
+        } else {
+            strip_extension_name(&file_obj.name())
+        };
+        imp.name.set_label(&display_name);
 
         if file_obj.is_directory() {
             imp.content_type.set_label("Folder");
@@ -59,6 +64,16 @@ impl WrenFileRow {
         imp.size.set_label("");
         imp.modified.set_label("");
         imp.icon.clear();
+    }
+}
+
+fn strip_extension_name(name: &str) -> String {
+    if name.starts_with('.') {
+        return name.to_string();
+    }
+    match name.rfind('.') {
+        Some(pos) if pos > 0 => name[..pos].to_string(),
+        _ => name.to_string(),
     }
 }
 

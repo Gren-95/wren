@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -22,7 +22,10 @@ impl Default for WrenFileList {
     }
 }
 
-fn make_row_factory(cut_uris: Rc<RefCell<HashSet<String>>>) -> gtk4::SignalListItemFactory {
+fn make_row_factory(
+    cut_uris: Rc<RefCell<HashSet<String>>>,
+    show_extensions: bool,
+) -> gtk4::SignalListItemFactory {
     let factory = gtk4::SignalListItemFactory::new();
     factory.connect_setup(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
@@ -39,7 +42,7 @@ fn make_row_factory(cut_uris: Rc<RefCell<HashSet<String>>>) -> gtk4::SignalListI
             .and_downcast::<WrenFileRow>()
             .expect("child must be WrenFileRow");
         let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
-        row.bind(&file_obj);
+        row.bind(&file_obj, show_extensions);
         if is_cut {
             row.set_opacity(0.5);
         }
@@ -74,8 +77,19 @@ impl WrenFileList {
         set.clear();
         set.extend(uris.iter().cloned());
         drop(set);
-        imp.list_view
-            .set_factory(Some(&make_row_factory(Rc::clone(&imp.cut_uris))));
+        imp.list_view.set_factory(Some(&make_row_factory(
+            Rc::clone(&imp.cut_uris),
+            imp.show_extensions.get(),
+        )));
+    }
+
+    pub fn set_show_extensions(&self, show: bool) {
+        let imp = imp::WrenFileList::from_obj(self);
+        imp.show_extensions.set(show);
+        imp.list_view.set_factory(Some(&make_row_factory(
+            Rc::clone(&imp.cut_uris),
+            show,
+        )));
     }
 
     pub fn setup_drag_source(&self) {
@@ -177,6 +191,7 @@ mod imp {
     pub struct WrenFileList {
         pub list_view: gtk4::ListView,
         pub cut_uris: Rc<RefCell<HashSet<String>>>,
+        pub show_extensions: Cell<bool>,
     }
 
     impl Default for WrenFileList {
@@ -184,6 +199,7 @@ mod imp {
             Self {
                 list_view: Default::default(),
                 cut_uris: Rc::new(RefCell::new(HashSet::new())),
+                show_extensions: Cell::new(true),
             }
         }
     }
@@ -203,8 +219,10 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            self.list_view
-                .set_factory(Some(&super::make_row_factory(Rc::clone(&self.cut_uris))));
+            self.list_view.set_factory(Some(&super::make_row_factory(
+                Rc::clone(&self.cut_uris),
+                true,
+            )));
             self.list_view.set_enable_rubberband(true);
             self.list_view.set_vexpand(true);
             self.list_view.set_hexpand(true);

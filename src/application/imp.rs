@@ -9,6 +9,7 @@ use crate::window::WrenWindow;
 pub struct WrenApplication {
     pub terminal_cmd: RefCell<String>,
     pub show_hidden: Cell<bool>,
+    pub show_extensions: Cell<bool>,
     pub zoom_level: Cell<i32>,
     pub view_mode: RefCell<String>,
     pub sort_key: RefCell<String>,
@@ -22,6 +23,7 @@ impl Default for WrenApplication {
         Self {
             terminal_cmd: RefCell::new(String::new()),
             show_hidden: Cell::new(false),
+            show_extensions: Cell::new(true),
             zoom_level: Cell::new(3),
             view_mode: RefCell::new("grid".to_string()),
             sort_key: RefCell::new("name".to_string()),
@@ -49,6 +51,9 @@ impl WrenApplication {
             }
             if let Ok(v) = kf.boolean("View", "show_hidden") {
                 self.show_hidden.set(v);
+            }
+            if let Ok(v) = kf.boolean("View", "show_extensions") {
+                self.show_extensions.set(v);
             }
             if let Ok(v) = kf.integer("View", "zoom_level") {
                 self.zoom_level.set(v.clamp(1, 5));
@@ -83,6 +88,7 @@ impl WrenApplication {
         let _ = kf.load_from_file(&path, glib::KeyFileFlags::NONE);
         kf.set_string("General", "terminal", &self.terminal_cmd.borrow());
         kf.set_boolean("View", "show_hidden", self.show_hidden.get());
+        kf.set_boolean("View", "show_extensions", self.show_extensions.get());
         kf.set_integer("View", "zoom_level", self.zoom_level.get());
         kf.set_string("View", "view_mode", &self.view_mode.borrow());
         kf.set_string("Sort", "key", &self.sort_key.borrow());

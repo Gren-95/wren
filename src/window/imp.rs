@@ -47,6 +47,7 @@ pub struct WrenWindow {
     pub tabs: RefCell<Vec<TabState>>,
     pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
     pub show_hidden: Cell<bool>,
+    pub show_extensions: Cell<bool>,
     pub zoom_level: Cell<i32>,
     pub undo_stack: RefCell<Vec<UndoOp>>,
     pub redo_stack: RefCell<Vec<UndoOp>>,
@@ -73,6 +74,7 @@ impl Default for WrenWindow {
             tabs: Default::default(),
             clipboard_files: Default::default(),
             show_hidden: Default::default(),
+            show_extensions: Cell::new(true),
             zoom_level: Cell::new(3),
             undo_stack: Default::default(),
             redo_stack: Default::default(),
@@ -231,6 +233,34 @@ impl ObjectImpl for WrenWindow {
             }
         ));
 
+        // Stateful toggle-extensions action
+        let toggle_ext_action = gio::SimpleAction::new_stateful(
+            "toggle-extensions",
+            None,
+            &true.to_variant(),
+        );
+        toggle_ext_action.connect_activate(glib::clone!(
+            #[weak]
+            obj,
+            move |action, _| {
+                let current = action
+                    .state()
+                    .and_then(|v| v.get::<bool>())
+                    .unwrap_or(true);
+                let new_val = !current;
+                action.set_state(&new_val.to_variant());
+                obj.imp().show_extensions.set(new_val);
+                obj.apply_extensions_setting();
+                if let Some(app) = obj
+                    .application()
+                    .and_downcast::<crate::application::WrenApplication>()
+                {
+                    app.set_show_extensions(new_val);
+                }
+            }
+        ));
+        obj.add_action(&toggle_ext_action);
+
         // Stateful toggle-hidden action (drives checkmark in hamburger menu)
         let toggle_hidden_action = gio::SimpleAction::new_stateful(
             "toggle-hidden",
@@ -343,6 +373,7 @@ impl ObjectImpl for WrenWindow {
 
         let view_section = gio::Menu::new();
         view_section.append(Some("Show Hidden Files"), Some("win.toggle-hidden"));
+        view_section.append(Some("Show File Extensions"), Some("win.toggle-extensions"));
         hamburger.append_section(None, &view_section);
 
         // Sort submenu
@@ -390,6 +421,14 @@ impl ObjectImpl for WrenWindow {
             let (w, h) = app.window_size();
             obj.set_default_size(w, h);
             obj.imp().show_hidden.set(app.show_hidden());
+            let show_ext = app.show_extensions();
+            obj.imp().show_extensions.set(show_ext);
+            if let Some(action) = obj
+                .lookup_action("toggle-extensions")
+                .and_downcast::<gio::SimpleAction>()
+            {
+                action.set_state(&show_ext.to_variant());
+            }
             obj.imp().zoom_level.set(app.zoom_level());
         }
 
@@ -465,6 +504,7 @@ impl ObjectImpl for WrenWindow {
         obj.add_controller(mouse_nav);
 
         obj.setup_search();
+        obj.setup_volume_monitor();
         obj.update_selection_actions();
         obj.update_undo_actions();
 

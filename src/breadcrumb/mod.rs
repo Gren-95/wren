@@ -78,6 +78,23 @@ impl WrenBreadcrumbBar {
                         win.navigate_to(file_clone.clone());
                     }
                 });
+
+                // Middle-click opens the segment location in a new tab
+                let file_mid = ancestor.clone();
+                let mid_gesture = gtk4::GestureClick::new();
+                mid_gesture.set_button(2);
+                mid_gesture.connect_pressed(move |gesture, _, _, _| {
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                    if let Some(win) = gesture
+                        .widget()
+                        .and_then(|w| w.root())
+                        .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
+                    {
+                        win.add_tab(file_mid.clone());
+                    }
+                });
+                btn.add_controller(mid_gesture);
+
                 crumb_box.append(&btn);
 
                 // Root already IS "/" — adding a separator would produce "//"

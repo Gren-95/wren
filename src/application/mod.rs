@@ -29,6 +29,9 @@ impl WrenApplication {
     pub fn show_hidden(&self) -> bool { self.imp().show_hidden.get() }
     pub fn set_show_hidden(&self, v: bool) { self.imp().show_hidden.set(v); self.imp().save_settings(); }
 
+    pub fn show_extensions(&self) -> bool { self.imp().show_extensions.get() }
+    pub fn set_show_extensions(&self, v: bool) { self.imp().show_extensions.set(v); self.imp().save_settings(); }
+
     pub fn zoom_level(&self) -> i32 { self.imp().zoom_level.get() }
     pub fn set_zoom_level(&self, v: i32) { self.imp().zoom_level.set(v); self.imp().save_settings(); }
 
