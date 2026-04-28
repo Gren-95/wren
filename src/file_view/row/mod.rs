@@ -40,9 +40,7 @@ impl WrenFileRow {
 
         let ts = file_obj.modified();
         if ts > 0 {
-            if let Ok(dt) = glib::DateTime::from_unix_local(ts) {
-                imp.modified.set_label(&dt.format("%e %b %Y").unwrap_or_default());
-            }
+            imp.modified.set_label(&format_modified(ts));
         }
 
         if let Some(icon) = file_obj.icon() {
@@ -61,6 +59,36 @@ impl WrenFileRow {
         imp.size.set_label("");
         imp.modified.set_label("");
         imp.icon.clear();
+    }
+}
+
+fn format_modified(ts: i64) -> String {
+    let Ok(file_dt) = glib::DateTime::from_unix_local(ts) else {
+        return String::new();
+    };
+    let now_unix = glib::DateTime::now_local()
+        .map(|dt| dt.to_unix())
+        .unwrap_or(ts);
+    let age = now_unix.saturating_sub(ts);
+
+    if age < 60 {
+        "Just now".to_string()
+    } else if age < 3600 {
+        let m = age / 60;
+        format!("{m} minute{} ago", if m == 1 { "" } else { "s" })
+    } else if age < 86_400 {
+        let h = age / 3600;
+        format!("{h} hour{} ago", if h == 1 { "" } else { "s" })
+    } else if age < 86_400 * 2 {
+        "Yesterday".to_string()
+    } else if age < 86_400 * 7 {
+        let d = age / 86_400;
+        format!("{d} days ago")
+    } else {
+        file_dt
+            .format("%e %b %Y")
+            .map(|s| s.to_string())
+            .unwrap_or_default()
     }
 }
 

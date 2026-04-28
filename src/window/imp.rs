@@ -196,6 +196,12 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action("win.new-window", None, |win, _, _| {
             win.new_window();
         });
+        klass.install_action("win.copy-path", None, |win, _, _| {
+            win.copy_path();
+        });
+        klass.install_action("win.show-shortcuts", None, |win, _, _| {
+            win.show_shortcuts();
+        });
     }
 
     fn instance_init(obj: &InitializingObject<Self>) {
@@ -372,9 +378,10 @@ impl ObjectImpl for WrenWindow {
         settings_section.append(Some("Settings…"), Some("win.open-settings"));
         hamburger.append_section(None, &settings_section);
 
-        let about_section = gio::Menu::new();
-        about_section.append(Some("About Wren"), Some("win.about"));
-        hamburger.append_section(None, &about_section);
+        let help_section = gio::Menu::new();
+        help_section.append(Some("Keyboard Shortcuts"), Some("win.show-shortcuts"));
+        help_section.append(Some("About Wren"), Some("win.about"));
+        hamburger.append_section(None, &help_section);
 
         obj.imp().menu_button.set_menu_model(Some(&hamburger));
 

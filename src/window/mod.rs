@@ -624,6 +624,7 @@ impl WrenWindow {
         file_section.append(Some("Rename"), Some("win.rename"));
         file_section.append(Some("Create Link"), Some("win.create-link"));
         file_section.append(Some("Add to Bookmarks"), Some("win.add-bookmark"));
+        file_section.append(Some("Copy Path"), Some("win.copy-path"));
         file_section.append(Some("Move to Trash"), Some("win.move-to-trash"));
         menu.append_section(None, &file_section);
 
@@ -1766,6 +1767,218 @@ impl WrenWindow {
         if let Some(app) = self.application().and_downcast::<WrenApplication>() {
             WrenWindow::new(&app).present();
         }
+    }
+
+    pub fn copy_path(&self) {
+        let path = self
+            .selected_files()
+            .into_iter()
+            .next()
+            .and_then(|f| f.path())
+            .map(|p| p.to_string_lossy().into_owned())
+            .or_else(|| {
+                let idx = self.current_tab_index()?;
+                let tabs = self.imp().tabs.borrow();
+                tabs.get(idx)?
+                    .navigation
+                    .current()?
+                    .path()
+                    .map(|p| p.to_string_lossy().into_owned())
+            });
+        if let Some(path) = path {
+            self.clipboard().set_text(&path);
+            self.show_toast("Path copied to clipboard");
+        }
+    }
+
+    #[allow(deprecated)]
+    pub fn show_shortcuts(&self) {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="GtkShortcutsWindow" id="win">
+    <property name="modal">true</property>
+    <child>
+      <object class="GtkShortcutsSection">
+        <property name="title">Shortcuts</property>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Navigation</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Go Back</property>
+                <property name="accelerator">&lt;Alt&gt;Left</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Go Forward</property>
+                <property name="accelerator">&lt;Alt&gt;Right</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Go Up</property>
+                <property name="accelerator">&lt;Alt&gt;Up</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Go to Home Folder</property>
+                <property name="accelerator">&lt;Alt&gt;Home</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Focus Path Bar</property>
+                <property name="accelerator">&lt;Primary&gt;l</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">New Tab</property>
+                <property name="accelerator">&lt;Primary&gt;t</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Close Tab</property>
+                <property name="accelerator">&lt;Primary&gt;w</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">New Window</property>
+                <property name="accelerator">&lt;Primary&gt;n</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">View</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Search</property>
+                <property name="accelerator">&lt;Primary&gt;f</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Show Hidden Files</property>
+                <property name="accelerator">&lt;Primary&gt;h</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Zoom In</property>
+                <property name="accelerator">&lt;Primary&gt;equal</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Zoom Out</property>
+                <property name="accelerator">&lt;Primary&gt;minus</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Reset Zoom</property>
+                <property name="accelerator">&lt;Primary&gt;0</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Reload</property>
+                <property name="accelerator">F5</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">File Operations</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Copy</property>
+                <property name="accelerator">&lt;Primary&gt;c</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Cut</property>
+                <property name="accelerator">&lt;Primary&gt;x</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Paste</property>
+                <property name="accelerator">&lt;Primary&gt;v</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Select All</property>
+                <property name="accelerator">&lt;Primary&gt;a</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Rename</property>
+                <property name="accelerator">F2</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Move to Trash</property>
+                <property name="accelerator">Delete</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Delete Permanently</property>
+                <property name="accelerator">&lt;Shift&gt;Delete</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">New Folder</property>
+                <property name="accelerator">&lt;Primary&gt;&lt;Shift&gt;n</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Add Bookmark</property>
+                <property name="accelerator">&lt;Primary&gt;d</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Properties</property>
+                <property name="accelerator">&lt;Alt&gt;Return</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Undo</property>
+                <property name="accelerator">&lt;Primary&gt;z</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Redo</property>
+                <property name="accelerator">&lt;Primary&gt;&lt;Shift&gt;z</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>"#;
+        let builder = gtk4::Builder::from_string(xml);
+        let window: gtk4::ShortcutsWindow = builder.object("win").expect("shortcuts window");
+        window.set_transient_for(Some(self));
+        window.present();
     }
 
     // ── Window size persistence ───────────────────────────────────────────────

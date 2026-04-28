@@ -160,6 +160,7 @@ impl ApplicationImpl for WrenApplication {
         app.set_accels_for_action("win.reload", &["F5"]);
         app.set_accels_for_action("win.navigate-home", &["<Alt>Home"]);
         app.set_accels_for_action("win.new-window", &["<Primary>n"]);
+        app.set_accels_for_action("win.show-shortcuts", &["<Primary>question"]);
     }
 }
 
