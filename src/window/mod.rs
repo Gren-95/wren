@@ -1466,36 +1466,52 @@ impl WrenWindow {
         let appearance_group = adw::PreferencesGroup::new();
         appearance_group.set_title("Appearance");
 
-        let scheme_row = adw::ComboRow::new();
+        let scheme_row = adw::ActionRow::new();
         scheme_row.set_title("Color Scheme");
-        let options = gtk4::StringList::new(&["Follow System", "Light", "Dark"]);
-        scheme_row.set_model(Some(&options));
+
+        let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        btn_box.add_css_class("linked");
+        btn_box.set_valign(gtk4::Align::Center);
+
+        let auto_btn  = gtk4::ToggleButton::with_label("Auto");
+        let light_btn = gtk4::ToggleButton::with_label("Light");
+        let dark_btn  = gtk4::ToggleButton::with_label("Dark");
+        light_btn.set_group(Some(&auto_btn));
+        dark_btn.set_group(Some(&auto_btn));
+
         let current_scheme = self
             .application()
             .and_downcast::<WrenApplication>()
             .map(|a| a.color_scheme())
             .unwrap_or_default();
-        let initial_idx = match current_scheme.as_str() {
-            "light" => 1u32,
-            "dark"  => 2u32,
-            _       => 0u32,
-        };
-        scheme_row.set_selected(initial_idx);
-        scheme_row.connect_selected_notify(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |row| {
-                let (scheme_str, adw_scheme) = match row.selected() {
-                    1 => ("light", adw::ColorScheme::ForceLight),
-                    2 => ("dark",  adw::ColorScheme::ForceDark),
-                    _ => ("default", adw::ColorScheme::Default),
-                };
-                adw::StyleManager::default().set_color_scheme(adw_scheme);
-                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
-                    app.set_color_scheme_pref(scheme_str);
+        match current_scheme.as_str() {
+            "light" => light_btn.set_active(true),
+            "dark"  => dark_btn.set_active(true),
+            _       => auto_btn.set_active(true),
+        }
+
+        let connect_scheme = |btn: &gtk4::ToggleButton, scheme_str: &'static str, adw_scheme: adw::ColorScheme| {
+            btn.connect_toggled(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |btn| {
+                    if btn.is_active() {
+                        adw::StyleManager::default().set_color_scheme(adw_scheme);
+                        if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                            app.set_color_scheme_pref(scheme_str);
+                        }
+                    }
                 }
-            }
-        ));
+            ));
+        };
+        connect_scheme(&auto_btn,  "default", adw::ColorScheme::Default);
+        connect_scheme(&light_btn, "light",   adw::ColorScheme::ForceLight);
+        connect_scheme(&dark_btn,  "dark",    adw::ColorScheme::ForceDark);
+
+        btn_box.append(&auto_btn);
+        btn_box.append(&light_btn);
+        btn_box.append(&dark_btn);
+        scheme_row.add_suffix(&btn_box);
         appearance_group.add(&scheme_row);
         page.add(&appearance_group);
 

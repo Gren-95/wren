@@ -60,7 +60,7 @@ label.wren-crumb-sep {
 
 /* Current directory — accent chip, clicking enters edit mode */
 button.wren-current-crumb {
-  padding: 5px 12px;
+  padding: 2px 8px;
   border-radius: 9999px;
   min-width: 0;
   font-size: 0.9em;
