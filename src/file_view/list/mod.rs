@@ -43,11 +43,15 @@ fn make_row_factory(cut_uris: Rc<RefCell<HashSet<String>>>) -> gtk4::SignalListI
         if is_cut {
             row.set_opacity(0.5);
         }
+        if file_obj.is_hidden() {
+            row.add_css_class("wren-hidden-file");
+        }
     });
     factory.connect_unbind(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
         if let Some(row) = list_item.child().and_downcast::<WrenFileRow>() {
             row.set_opacity(1.0);
+            row.remove_css_class("wren-hidden-file");
             row.unbind();
         }
     });
@@ -116,6 +120,39 @@ impl WrenFileList {
             )));
             popover.popup();
         });
+        imp.list_view.add_controller(gesture);
+    }
+
+    pub fn setup_empty_area_click(&self) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(1);
+        gesture.connect_pressed(glib::clone!(
+            #[weak(rename_to = lv)]
+            imp.list_view,
+            move |_, _, x, y| {
+                let on_item = lv
+                    .pick(x, y, gtk4::PickFlags::DEFAULT)
+                    .map_or(false, |w| {
+                        let mut cur: Option<gtk4::Widget> = Some(w);
+                        while let Some(widget) = cur {
+                            if widget.is::<WrenFileRow>() {
+                                return true;
+                            }
+                            if widget.is::<gtk4::ListView>() {
+                                return false;
+                            }
+                            cur = widget.parent();
+                        }
+                        false
+                    });
+                if !on_item {
+                    if let Some(model) = lv.model().and_downcast::<gtk4::MultiSelection>() {
+                        model.unselect_all();
+                    }
+                }
+            }
+        ));
         imp.list_view.add_controller(gesture);
     }
 

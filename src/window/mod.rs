@@ -88,6 +88,8 @@ impl WrenWindow {
         tab.file_list.setup_context_menu(&menu);
         tab.file_grid.setup_drag_source();
         tab.file_list.setup_drag_source();
+        tab.file_grid.setup_empty_area_click();
+        tab.file_list.setup_empty_area_click();
 
         // Restore persisted view mode and sort for new tabs
         if let Some(app) = self.application().and_downcast::<WrenApplication>() {

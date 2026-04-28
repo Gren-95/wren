@@ -46,11 +46,15 @@ fn make_cell_factory(
         if is_cut {
             cell.set_opacity(0.5);
         }
+        if file_obj.is_hidden() {
+            cell.add_css_class("wren-hidden-file");
+        }
     });
     factory.connect_unbind(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
         if let Some(cell) = list_item.child().and_downcast::<WrenFileCell>() {
             cell.set_opacity(1.0);
+            cell.remove_css_class("wren-hidden-file");
             cell.unbind();
         }
     });
@@ -111,6 +115,35 @@ impl WrenFileGrid {
             ))
         });
         imp.grid_view.add_controller(drag);
+    }
+
+    pub fn setup_empty_area_click(&self) {
+        let imp = imp::WrenFileGrid::from_obj(self);
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(1);
+        gesture.connect_pressed(glib::clone!(
+            #[weak(rename_to = gv)]
+            imp.grid_view,
+            move |_, _, x, y| {
+                let on_item = gv
+                    .pick(x, y, gtk4::PickFlags::DEFAULT)
+                    .map_or(false, |w| {
+                        let mut cur: Option<gtk4::Widget> = Some(w);
+                        while let Some(widget) = cur {
+                            if widget.is::<WrenFileCell>() { return true; }
+                            if widget.is::<gtk4::GridView>() { return false; }
+                            cur = widget.parent();
+                        }
+                        false
+                    });
+                if !on_item {
+                    if let Some(model) = gv.model().and_downcast::<gtk4::MultiSelection>() {
+                        model.unselect_all();
+                    }
+                }
+            }
+        ));
+        imp.grid_view.add_controller(gesture);
     }
 
     pub fn setup_context_menu(&self, menu: &gio::MenuModel) {

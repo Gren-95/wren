@@ -82,6 +82,10 @@ impl FileObject {
         self.imp().file_info.get().expect("file_info set at construction")
     }
 
+    pub fn is_hidden(&self) -> bool {
+        self.file_info().is_hidden()
+    }
+
     pub fn icon(&self) -> Option<gio::Icon> {
         self.file_info().icon()
     }

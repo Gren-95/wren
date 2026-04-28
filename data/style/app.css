@@ -1,23 +1,25 @@
 /* ── File grid cells ─────────────────────────────────────────────────────── */
 
-.wren-file-cell {
+/* Give GTK's own selection/hover highlight a margin and rounded corners.
+   The margin creates gaps between adjacent selected cells; GTK paints the
+   background within the (now-rounded, now-inset) child bounds automatically. */
+gridview > child {
+  margin: 3px;
   border-radius: 8px;
-  padding: 4px;
-  /* GPU-friendly transition: background-color is a simple color blend, not
-     an offscreen composite — the GSK GL renderer handles it in one pass. */
   transition: background-color 120ms ease;
 }
 
-.wren-file-cell:hover {
-  background-color: alpha(@accent_color, 0.08);
-}
-
-.wren-file-cell:selected {
-  background-color: alpha(@accent_color, 0.2);
+.wren-file-cell {
+  border-radius: 8px;
+  padding: 4px;
 }
 
 .wren-file-cell label {
   font-size: 0.85em;
+}
+
+.wren-hidden-file {
+  opacity: 0.5;
 }
 
 /* ── Breadcrumb bar ──────────────────────────────────────────────────────── */

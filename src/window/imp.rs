@@ -424,6 +424,26 @@ impl ObjectImpl for WrenWindow {
             }
         });
 
+        // Window-level capture click: dismiss path entry when clicking outside breadcrumb bar
+        let dismiss_gesture = gtk4::GestureClick::new();
+        dismiss_gesture.set_button(0);
+        dismiss_gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        dismiss_gesture.connect_pressed(glib::clone!(
+            #[weak]
+            obj,
+            move |_, _, x, y| {
+                let imp = obj.imp();
+                let bar = imp.breadcrumb_bar.upcast_ref::<gtk4::Widget>();
+                let in_bar = obj
+                    .pick(x, y, gtk4::PickFlags::DEFAULT)
+                    .map_or(false, |w| w == *bar || w.is_ancestor(bar));
+                if !in_bar {
+                    imp.breadcrumb_bar.leave_edit_mode();
+                }
+            }
+        ));
+        obj.add_controller(dismiss_gesture);
+
         // Mouse back/forward button navigation (buttons 8 and 9)
         let mouse_nav = gtk4::GestureClick::new();
         mouse_nav.set_button(0);
