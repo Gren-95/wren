@@ -136,3 +136,10 @@ button.wren-breadcrumb:drop(active) {
   outline: 2px solid alpha(@accent_color, 0.6);
   outline-offset: -2px;
 }
+
+/* Sidebar rows highlight when dragging files over them */
+.navigation-sidebar > row:drop(active) {
+  background-color: alpha(@accent_color, 0.25);
+  outline: 2px solid alpha(@accent_color, 0.6);
+  outline-offset: -2px;
+}

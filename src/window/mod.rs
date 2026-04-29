@@ -1076,6 +1076,20 @@ impl WrenWindow {
         confirm.present(Some(self));
     }
 
+    /// Trash a specific list of files (used by sidebar drop on Trash).
+    pub fn trash_files(&self, files: Vec<gio::File>) {
+        if files.is_empty() {
+            return;
+        }
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                window.do_trash_files(files).await;
+            }
+        ));
+    }
+
     async fn do_trash_files(&self, files: Vec<gio::File>) {
         let mut not_supported: Vec<gio::File> = Vec::new();
         for file in &files {

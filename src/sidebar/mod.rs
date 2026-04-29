@@ -2,6 +2,7 @@ mod imp;
 
 use adw::subclass::prelude::*;
 use glib::Object;
+use gtk4::gdk;
 use gtk4::prelude::*;
 
 glib::wrapper! {
@@ -29,7 +30,8 @@ impl WrenSidebar {
         let imp = self.imp();
         let list = &imp.list_box;
 
-        list.set_selection_mode(gtk4::SelectionMode::Single);
+        // No persistent selection highlight — rows are activated, not selected.
+        list.set_selection_mode(gtk4::SelectionMode::None);
 
         let mut uris: Vec<String> = Vec::new();
 
@@ -72,6 +74,7 @@ impl WrenSidebar {
             let row = Self::build_place_row(label, icon);
             if !uri.is_empty() {
                 Self::attach_sidebar_context_menu(&row, &uri, false);
+                Self::attach_drop_target(&row, &uri);
             }
             list.append(&row);
             uris.push(uri);
@@ -168,6 +171,7 @@ impl WrenSidebar {
                 };
                 let row = Self::build_place_row(&display, "folder-symbolic");
                 Self::attach_sidebar_context_menu(&row, uri, true);
+                Self::attach_drop_target(&row, uri);
                 list.append(&row);
                 imp.place_uris.borrow_mut().push(uri.clone());
             }
@@ -239,6 +243,7 @@ impl WrenSidebar {
                 let uri = mount.root().uri().to_string();
                 let row = Self::build_place_row(&name, &icon_name);
                 Self::attach_sidebar_context_menu(&row, &uri, false);
+                Self::attach_drop_target(&row, &uri);
                 list.append(&row);
                 imp.place_uris.borrow_mut().push(uri);
             }
@@ -250,26 +255,57 @@ impl WrenSidebar {
         self.reload_volumes();
     }
 
-    /// Update sidebar highlight to match the current directory.
-    /// Only exact matches are highlighted; navigating to a folder not in the
-    /// sidebar deselects everything (no ancestor/prefix matching).
-    pub fn set_location(&self, file: &gio::File) {
-        let imp = self.imp();
-        let uris = imp.place_uris.borrow();
+    /// No-op: the sidebar uses SelectionMode::None so there is no selection
+    /// highlight to track. Kept for API compatibility with callers in window/.
+    pub fn set_location(&self, _file: &gio::File) {}
 
-        let match_idx = uris.iter().enumerate().find_map(|(i, uri)| {
-            if uri.is_empty() {
-                return None;
+    /// Attach a DropTarget so dragging files onto the row moves/copies them
+    /// into the URI. trash:/// trashes the dropped files; recent:/// and
+    /// section headers (empty URI) are skipped.
+    fn attach_drop_target(row: &gtk4::ListBoxRow, uri: &str) {
+        if uri.is_empty() || uri == "recent:///" {
+            return;
+        }
+        let drop = gtk4::DropTarget::new(
+            gdk::FileList::static_type(),
+            gdk::DragAction::COPY | gdk::DragAction::MOVE,
+        );
+        let uri_owned = uri.to_string();
+        drop.connect_drop(glib::clone!(
+            #[weak]
+            row,
+            #[upgrade_or]
+            false,
+            move |drop_target, value, _x, _y| {
+                let Ok(file_list) = value.get::<gdk::FileList>() else {
+                    return false;
+                };
+                let files = file_list.files();
+                if files.is_empty() {
+                    return false;
+                }
+                let Some(win) = row
+                    .root()
+                    .and_downcast::<crate::window::WrenWindow>()
+                else {
+                    return false;
+                };
+                if uri_owned == "trash:///" {
+                    win.trash_files(files);
+                    return true;
+                }
+                let action = drop_target
+                    .current_drop()
+                    .map(|d| d.actions())
+                    .unwrap_or(gdk::DragAction::COPY);
+                let is_move = !action.contains(gdk::DragAction::COPY)
+                    && action.contains(gdk::DragAction::MOVE);
+                let dest = gio::File::for_uri(&uri_owned);
+                win.drop_files(files, Some(dest), is_move);
+                true
             }
-            if file.equal(&gio::File::for_uri(uri)) {
-                Some(i as i32)
-            } else {
-                None
-            }
-        });
-
-        let row = match_idx.and_then(|idx| imp.list_box.row_at_index(idx));
-        imp.list_box.select_row(row.as_ref());
+        ));
+        row.add_controller(drop);
     }
 
     fn build_place_row(label: &str, icon_name: &str) -> gtk4::ListBoxRow {
