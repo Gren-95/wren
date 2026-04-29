@@ -3,6 +3,8 @@ use glib::subclass::InitializingObject;
 use gtk4::prelude::*;
 use gtk4::{CompositeTemplate, TemplateChild};
 
+use crate::model::FileObject;
+
 #[derive(Debug, Default, CompositeTemplate)]
 #[template(resource = "/io/github/wren/ui/file_cell.ui")]
 pub struct WrenFileCell {
@@ -10,6 +12,10 @@ pub struct WrenFileCell {
     pub icon: TemplateChild<gtk4::Image>,
     #[template_child]
     pub name: TemplateChild<gtk4::Label>,
+
+    // Kept across unbind/bind so set_icon_size can re-render without a model signal.
+    pub bound_file: std::cell::RefCell<Option<FileObject>>,
+    pub icon_size: std::cell::Cell<u32>,
 }
 
 #[glib::object_subclass]

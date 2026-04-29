@@ -181,9 +181,10 @@ impl DirectoryModel {
                 )
                 .await?;
 
+            let mut all_items: Vec<FileObject> = Vec::new();
             loop {
                 if cancellable.is_cancelled() {
-                    break;
+                    return Ok(());
                 }
                 let infos = enumerator
                     .next_files_future(30, glib::Priority::DEFAULT)
@@ -192,14 +193,15 @@ impl DirectoryModel {
                     break;
                 }
                 for info in infos {
-                    if cancellable.is_cancelled() {
-                        return Ok(());
-                    }
                     let child = location.child(info.name());
-                    store.append(&FileObject::new(child, info));
+                    all_items.push(FileObject::new(child, info));
                 }
             }
 
+            // Add all items in one splice so GTK fires a single items_changed.
+            // This keeps the scroll position stable at 0 — progressive per-item
+            // appends would shift the sorted-model positions and drift the viewport.
+            store.splice(0, 0, &all_items);
             Ok(())
         }
     }

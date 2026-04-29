@@ -2,6 +2,7 @@ mod imp;
 
 use adw::subclass::prelude::*;
 use glib::Object;
+use gtk4::prelude::*;
 
 use crate::model::FileObject;
 
@@ -26,8 +27,11 @@ impl WrenFileRow {
         imp::WrenFileRow::from_obj(self)
     }
 
-    pub fn bind(&self, file_obj: &FileObject, show_extension: bool) {
+    pub fn bind(&self, file_obj: &FileObject, icon_size: u32, show_extension: bool) {
         let imp = self.imp();
+        imp.icon_size.set(icon_size);
+        imp.icon.set_pixel_size(icon_size as i32);
+
         let display_name = if show_extension {
             file_obj.name()
         } else {
@@ -57,12 +61,20 @@ impl WrenFileRow {
         }
     }
 
+    pub fn set_icon_size(&self, px: u32) {
+        let imp = self.imp();
+        imp.icon_size.set(px);
+        imp.icon.set_pixel_size(px as i32);
+        self.queue_resize();
+    }
+
     pub fn unbind(&self) {
         let imp = self.imp();
         imp.name.set_label("");
         imp.content_type.set_label("");
         imp.size.set_label("");
         imp.modified.set_label("");
+        imp.icon.set_pixel_size(24);
         imp.icon.clear();
     }
 }

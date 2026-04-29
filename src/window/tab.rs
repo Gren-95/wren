@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use adw::prelude::*;
 
@@ -21,6 +21,7 @@ pub struct TabState {
     pub sort_key: SortKey,
     pub sort_reversed: bool,
     pub status_bar: gtk4::Label,
+    pub load_gen: Cell<u64>,
 }
 
 impl TabState {
@@ -33,17 +34,6 @@ impl TabState {
         view_stack.add_named(&grid, Some("grid"));
         view_stack.add_named(&list, Some("list"));
         view_stack.set_visible_child_name("grid");
-
-        let spinner_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        spinner_box.set_halign(gtk4::Align::Center);
-        spinner_box.set_valign(gtk4::Align::Center);
-        spinner_box.set_vexpand(true);
-        let spinner = gtk4::Spinner::builder()
-            .spinning(true)
-            .width_request(32)
-            .height_request(32)
-            .build();
-        spinner_box.append(&spinner);
 
         let empty_page = adw::StatusPage::builder()
             .icon_name("folder-symbolic")
@@ -71,11 +61,11 @@ impl TabState {
 
         let content_stack = gtk4::Stack::new();
         content_stack.set_vexpand(true);
-        content_stack.add_named(&spinner_box, Some("loading"));
         content_stack.add_named(&empty_page, Some("empty"));
         content_stack.add_named(&no_results_page, Some("no-results"));
         content_stack.add_named(&error_page, Some("error"));
         content_stack.add_named(&view_stack, Some("files"));
+        content_stack.set_visible_child_name("files");
 
         let status_bar = gtk4::Label::new(None);
         status_bar.set_halign(gtk4::Align::Start);
@@ -107,6 +97,7 @@ impl TabState {
             sort_key: SortKey::Name,
             sort_reversed: false,
             status_bar,
+            load_gen: Cell::new(0),
         }
     }
 

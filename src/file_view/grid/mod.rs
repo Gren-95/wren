@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::subclass::prelude::*;
@@ -22,43 +22,64 @@ impl Default for WrenFileGrid {
     }
 }
 
+// (path, pixel_size) → WrenFileCell; cleaned up on unbind.
+type BoundCells = Rc<RefCell<HashMap<usize, glib::WeakRef<WrenFileCell>>>>;
+
 fn make_cell_factory(
-    icon_size: u32,
-    cut_uris: Rc<RefCell<HashSet<String>>>,
+    icon_size: Rc<Cell<u32>>,
+    cut_uris: Rc<RefCell<std::collections::HashSet<String>>>,
     show_extensions: bool,
+    bound_cells: BoundCells,
 ) -> gtk4::SignalListItemFactory {
     let factory = gtk4::SignalListItemFactory::new();
+
     factory.connect_setup(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
         list_item.set_child(Some(&WrenFileCell::new()));
     });
-    factory.connect_bind(move |_, obj| {
-        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-        let file_obj = list_item
-            .item()
-            .and_downcast::<FileObject>()
-            .expect("item must be FileObject");
-        let cell = list_item
-            .child()
-            .and_downcast::<WrenFileCell>()
-            .expect("child must be WrenFileCell");
-        let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
-        cell.bind(&file_obj, icon_size, show_extensions);
-        if is_cut {
-            cell.set_opacity(0.5);
-        }
-        if file_obj.is_hidden() {
-            cell.add_css_class("wren-hidden-file");
-        }
-    });
-    factory.connect_unbind(|_, obj| {
-        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-        if let Some(cell) = list_item.child().and_downcast::<WrenFileCell>() {
-            cell.set_opacity(1.0);
-            cell.remove_css_class("wren-hidden-file");
-            cell.unbind();
-        }
-    });
+
+    {
+        let bound_cells = Rc::clone(&bound_cells);
+        factory.connect_bind(move |_, obj| {
+            let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+            let file_obj = list_item
+                .item()
+                .and_downcast::<FileObject>()
+                .expect("item must be FileObject");
+            let cell = list_item
+                .child()
+                .and_downcast::<WrenFileCell>()
+                .expect("child must be WrenFileCell");
+
+            let key = cell.as_ptr() as usize;
+            bound_cells.borrow_mut().insert(key, cell.downgrade());
+
+            let px = icon_size.get();
+            let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
+            cell.bind(&file_obj, px, show_extensions);
+            if is_cut {
+                cell.set_opacity(0.5);
+            }
+            if file_obj.is_hidden() {
+                cell.add_css_class("wren-hidden-file");
+            }
+        });
+    }
+
+    {
+        let bound_cells = Rc::clone(&bound_cells);
+        factory.connect_unbind(move |_, obj| {
+            let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+            if let Some(cell) = list_item.child().and_downcast::<WrenFileCell>() {
+                let key = cell.as_ptr() as usize;
+                bound_cells.borrow_mut().remove(&key);
+                cell.set_opacity(1.0);
+                cell.remove_css_class("wren-hidden-file");
+                cell.unbind();
+            }
+        });
+    }
+
     factory
 }
 
@@ -71,14 +92,20 @@ impl WrenFileGrid {
         imp::WrenFileGrid::from_obj(self).grid_view.set_model(Some(model));
     }
 
+    /// Zoom: update icon size in all currently-bound cells directly.
+    /// No factory replacement — avoids creating/destroying hundreds of widgets.
     pub fn set_icon_size(&self, icon_size: u32) {
         let imp = imp::WrenFileGrid::from_obj(self);
-        imp.current_icon_size.set(icon_size);
-        imp.grid_view.set_factory(Some(&make_cell_factory(
-            icon_size,
-            Rc::clone(&imp.cut_uris),
-            imp.show_extensions.get(),
-        )));
+        imp.icon_size.set(icon_size);
+        imp.bound_cells.borrow_mut().retain(|_, weak| {
+            if let Some(cell) = weak.upgrade() {
+                cell.set_icon_size(icon_size);
+                true
+            } else {
+                false
+            }
+        });
+        imp.grid_view.queue_resize();
     }
 
     pub fn set_cut_uris(&self, uris: &[String]) {
@@ -87,11 +114,11 @@ impl WrenFileGrid {
         set.clear();
         set.extend(uris.iter().cloned());
         drop(set);
-        let icon_size = imp.current_icon_size.get();
         imp.grid_view.set_factory(Some(&make_cell_factory(
-            icon_size,
+            Rc::clone(&imp.icon_size),
             Rc::clone(&imp.cut_uris),
             imp.show_extensions.get(),
+            Rc::clone(&imp.bound_cells),
         )));
     }
 
@@ -99,9 +126,10 @@ impl WrenFileGrid {
         let imp = imp::WrenFileGrid::from_obj(self);
         imp.show_extensions.set(show);
         imp.grid_view.set_factory(Some(&make_cell_factory(
-            imp.current_icon_size.get(),
+            Rc::clone(&imp.icon_size),
             Rc::clone(&imp.cut_uris),
             show,
+            Rc::clone(&imp.bound_cells),
         )));
     }
 
@@ -143,7 +171,7 @@ impl WrenFileGrid {
             imp.grid_view,
             move |_, _, x, y| {
                 let on_item = gv
-                    .pick(x, y, gtk4::PickFlags::DEFAULT)
+                    .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
                     .map_or(false, |w| {
                         let mut cur: Option<gtk4::Widget> = Some(w);
                         while let Some(widget) = cur {
@@ -179,6 +207,13 @@ impl WrenFileGrid {
         imp.grid_view.add_controller(gesture);
     }
 
+    pub fn scroll_to_top(&self) {
+        let imp = imp::WrenFileGrid::from_obj(self);
+        if let Some(adj) = imp.grid_view.vadjustment() {
+            adj.set_value(adj.lower());
+        }
+    }
+
     pub fn connect_item_activated<F: Fn(&FileObject) + 'static>(&self, f: F) {
         let imp = imp::WrenFileGrid::from_obj(self);
         imp.grid_view.connect_activate(move |grid_view, pos| {
@@ -199,18 +234,20 @@ mod imp {
     #[derive(Debug)]
     pub struct WrenFileGrid {
         pub grid_view: gtk4::GridView,
-        pub current_icon_size: Cell<u32>,
-        pub cut_uris: Rc<RefCell<HashSet<String>>>,
+        pub icon_size: Rc<Cell<u32>>,
+        pub cut_uris: Rc<RefCell<std::collections::HashSet<String>>>,
         pub show_extensions: Cell<bool>,
+        pub bound_cells: BoundCells,
     }
 
     impl Default for WrenFileGrid {
         fn default() -> Self {
             Self {
                 grid_view: Default::default(),
-                current_icon_size: Cell::new(64),
-                cut_uris: Rc::new(RefCell::new(HashSet::new())),
+                icon_size: Rc::new(Cell::new(64)),
+                cut_uris: Rc::new(RefCell::new(std::collections::HashSet::new())),
                 show_extensions: Cell::new(true),
+                bound_cells: Rc::new(RefCell::new(HashMap::new())),
             }
         }
     }
@@ -231,9 +268,10 @@ mod imp {
             self.parent_constructed();
 
             self.grid_view.set_factory(Some(&super::make_cell_factory(
-                64,
+                Rc::clone(&self.icon_size),
                 Rc::clone(&self.cut_uris),
                 true,
+                Rc::clone(&self.bound_cells),
             )));
             self.grid_view.set_min_columns(2);
             self.grid_view.set_max_columns(16);

@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use adw::subclass::prelude::*;
@@ -22,42 +22,58 @@ impl Default for WrenFileList {
     }
 }
 
+type BoundRows = Rc<RefCell<HashMap<usize, glib::WeakRef<WrenFileRow>>>>;
+
 fn make_row_factory(
+    icon_size: Rc<Cell<u32>>,
     cut_uris: Rc<RefCell<HashSet<String>>>,
     show_extensions: bool,
+    bound_rows: BoundRows,
 ) -> gtk4::SignalListItemFactory {
     let factory = gtk4::SignalListItemFactory::new();
     factory.connect_setup(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
         list_item.set_child(Some(&WrenFileRow::new()));
     });
-    factory.connect_bind(move |_, obj| {
-        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-        let file_obj = list_item
-            .item()
-            .and_downcast::<FileObject>()
-            .expect("item must be FileObject");
-        let row = list_item
-            .child()
-            .and_downcast::<WrenFileRow>()
-            .expect("child must be WrenFileRow");
-        let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
-        row.bind(&file_obj, show_extensions);
-        if is_cut {
-            row.set_opacity(0.5);
-        }
-        if file_obj.is_hidden() {
-            row.add_css_class("wren-hidden-file");
-        }
-    });
-    factory.connect_unbind(|_, obj| {
-        let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-        if let Some(row) = list_item.child().and_downcast::<WrenFileRow>() {
-            row.set_opacity(1.0);
-            row.remove_css_class("wren-hidden-file");
-            row.unbind();
-        }
-    });
+    {
+        let bound_rows = Rc::clone(&bound_rows);
+        factory.connect_bind(move |_, obj| {
+            let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+            let file_obj = list_item
+                .item()
+                .and_downcast::<FileObject>()
+                .expect("item must be FileObject");
+            let row = list_item
+                .child()
+                .and_downcast::<WrenFileRow>()
+                .expect("child must be WrenFileRow");
+
+            let key = row.as_ptr() as usize;
+            bound_rows.borrow_mut().insert(key, row.downgrade());
+
+            let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
+            row.bind(&file_obj, icon_size.get(), show_extensions);
+            if is_cut {
+                row.set_opacity(0.5);
+            }
+            if file_obj.is_hidden() {
+                row.add_css_class("wren-hidden-file");
+            }
+        });
+    }
+    {
+        let bound_rows = Rc::clone(&bound_rows);
+        factory.connect_unbind(move |_, obj| {
+            let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
+            if let Some(row) = list_item.child().and_downcast::<WrenFileRow>() {
+                let key = row.as_ptr() as usize;
+                bound_rows.borrow_mut().remove(&key);
+                row.set_opacity(1.0);
+                row.remove_css_class("wren-hidden-file");
+                row.unbind();
+            }
+        });
+    }
     factory
 }
 
@@ -71,6 +87,22 @@ impl WrenFileList {
         imp.list_view.set_model(Some(model));
     }
 
+    pub fn set_icon_size(&self, icon_size: u32) {
+        let imp = imp::WrenFileList::from_obj(self);
+        imp.icon_size.set(icon_size);
+        imp.bound_rows.borrow_mut().retain(|_, weak| {
+            if let Some(row) = weak.upgrade() {
+                row.set_icon_size(icon_size);
+                true
+            } else {
+                false
+            }
+        });
+        // Keep header spacer aligned: icon_size + row's inter-column spacing (8px)
+        imp.header_icon_spacer.set_size_request((icon_size + 8) as i32, -1);
+        imp.list_view.queue_resize();
+    }
+
     pub fn set_cut_uris(&self, uris: &[String]) {
         let imp = imp::WrenFileList::from_obj(self);
         let mut set = imp.cut_uris.borrow_mut();
@@ -78,8 +110,10 @@ impl WrenFileList {
         set.extend(uris.iter().cloned());
         drop(set);
         imp.list_view.set_factory(Some(&make_row_factory(
+            Rc::clone(&imp.icon_size),
             Rc::clone(&imp.cut_uris),
             imp.show_extensions.get(),
+            Rc::clone(&imp.bound_rows),
         )));
     }
 
@@ -87,8 +121,10 @@ impl WrenFileList {
         let imp = imp::WrenFileList::from_obj(self);
         imp.show_extensions.set(show);
         imp.list_view.set_factory(Some(&make_row_factory(
+            Rc::clone(&imp.icon_size),
             Rc::clone(&imp.cut_uris),
             show,
+            Rc::clone(&imp.bound_rows),
         )));
     }
 
@@ -170,6 +206,13 @@ impl WrenFileList {
         imp.list_view.add_controller(gesture);
     }
 
+    pub fn scroll_to_top(&self) {
+        let imp = imp::WrenFileList::from_obj(self);
+        if let Some(adj) = imp.list_view.vadjustment() {
+            adj.set_value(adj.lower());
+        }
+    }
+
     pub fn connect_item_activated<F: Fn(&FileObject) + 'static>(&self, f: F) {
         let imp = imp::WrenFileList::from_obj(self);
         imp.list_view.connect_activate(move |list_view, pos| {
@@ -212,6 +255,9 @@ mod imp {
         pub cut_uris: Rc<RefCell<HashSet<String>>>,
         pub show_extensions: Cell<bool>,
         pub sort_buttons: RefCell<Vec<gtk4::Button>>,
+        pub icon_size: Rc<Cell<u32>>,
+        pub bound_rows: BoundRows,
+        pub header_icon_spacer: gtk4::Box,
     }
 
     impl Default for WrenFileList {
@@ -221,6 +267,9 @@ mod imp {
                 cut_uris: Rc::new(RefCell::new(HashSet::new())),
                 show_extensions: Cell::new(true),
                 sort_buttons: RefCell::new(Vec::new()),
+                icon_size: Rc::new(Cell::new(24)),
+                bound_rows: Rc::new(RefCell::new(HashMap::new())),
+                header_icon_spacer: gtk4::Box::new(gtk4::Orientation::Horizontal, 0),
             }
         }
     }
@@ -241,13 +290,34 @@ mod imp {
             self.parent_constructed();
 
             self.list_view.set_factory(Some(&super::make_row_factory(
+                Rc::clone(&self.icon_size),
                 Rc::clone(&self.cut_uris),
                 true,
+                Rc::clone(&self.bound_rows),
             )));
             self.list_view.set_enable_rubberband(true);
             self.list_view.set_vexpand(true);
             self.list_view.set_hexpand(true);
             self.list_view.set_overflow(gtk4::Overflow::Hidden);
+
+            let scroll = gtk4::EventControllerScroll::new(
+                gtk4::EventControllerScrollFlags::VERTICAL,
+            );
+            scroll.connect_scroll(move |ctrl, _dx, dy| {
+                let mods = ctrl.current_event_state();
+                if mods.contains(gdk::ModifierType::CONTROL_MASK) {
+                    if let Some(win) = ctrl
+                        .widget()
+                        .and_then(|w| w.root())
+                        .and_downcast::<crate::window::WrenWindow>()
+                    {
+                        if dy < 0.0 { win.zoom_in(); } else { win.zoom_out(); }
+                    }
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            self.list_view.add_controller(scroll);
 
             // ── Column header row ─────────────────────────────────────────
             let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
@@ -255,27 +325,31 @@ mod imp {
             header_box.set_margin_start(8);
             header_box.set_margin_end(8);
 
-            // Spacer to align with icon (24px) + spacing (8px) in each row
-            let icon_spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-            icon_spacer.set_size_request(32, -1);
-            header_box.append(&icon_spacer);
+            // Spacer width = icon_size + row's inter-column spacing (8px)
+            self.header_icon_spacer.set_size_request(32, -1);
+            header_box.append(&self.header_icon_spacer);
 
-            // (label, sort_key, hexpand, width_request)
-            let cols: &[(&str, &str, bool, i32)] = &[
-                ("Name",     "name", true,  -1),
-                ("Type",     "type", false, 120),
-                ("Size",     "size", false, 80),
-                ("Modified", "date", false, 120),
+            // (label, sort_key, hexpand, width_request, right_align)
+            let cols: &[(&str, &str, bool, i32, bool)] = &[
+                ("Name",     "name", true,  -1,  false),
+                ("Type",     "type", false, 120, true),
+                ("Size",     "size", false, 80,  true),
+                ("Modified", "date", false, 120, true),
             ];
 
             let mut sort_buttons = self.sort_buttons.borrow_mut();
-            for &(label, key, expand, width) in cols {
+            for &(label, key, expand, width, right_align) in cols {
                 let btn = gtk4::Button::with_label(label);
                 btn.add_css_class("flat");
                 if expand {
                     btn.set_hexpand(true);
                 } else {
                     btn.set_width_request(width);
+                }
+                if right_align {
+                    if let Some(lbl) = btn.child().and_downcast::<gtk4::Label>() {
+                        lbl.set_xalign(1.0);
+                    }
                 }
                 let key = key.to_string();
                 btn.connect_clicked(move |btn| {

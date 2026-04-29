@@ -24,7 +24,7 @@
         <child>
           <object class="GtkLabel" id="content_type">
             <property name="width-request">120</property>
-            <property name="xalign">0</property>
+            <property name="xalign">1</property>
             <property name="ellipsize">end</property>
             <style>
               <class name="dim-label"/>

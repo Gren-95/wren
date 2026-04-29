@@ -314,6 +314,8 @@ impl WrenWindow {
             };
             tab.file_grid.set_model(&dir_model.selection);
             tab.file_list.set_model(&dir_model.selection);
+            tab.file_grid.scroll_to_top();
+            tab.file_list.scroll_to_top();
             if let Some(old) = tab.dir_model.as_ref() {
                 old.cancel();
             }
@@ -326,12 +328,20 @@ impl WrenWindow {
             tab.dir_model = Some(dir_model);
         }
 
-        // Apply current zoom to this tab's grid
-        let icon_size = self.icon_size_for_zoom(imp.zoom_level.get());
+        let level = imp.zoom_level.get();
+        let icon_size = self.icon_size_for_zoom(level);
+        let list_icon_size = self.list_icon_size_for_zoom(level);
+        let load_gen;
         {
             let tabs = imp.tabs.borrow();
             if let Some(tab) = tabs.get(tab_idx) {
                 tab.file_grid.set_icon_size(icon_size);
+                tab.file_list.set_icon_size(list_icon_size);
+                let next = tab.load_gen.get() + 1;
+                tab.load_gen.set(next);
+                load_gen = next;
+            } else {
+                return;
             }
         }
 
@@ -365,7 +375,7 @@ impl WrenWindow {
         }
 
         status_bar.set_text("");
-        content_stack.set_visible_child_name("loading");
+        content_stack.set_visible_child_name("files");
 
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
@@ -373,6 +383,14 @@ impl WrenWindow {
             async move {
                 match load_future.await {
                     Ok(()) => {
+                        let is_current = {
+                            let tabs = window.imp().tabs.borrow();
+                            tabs.get(tab_idx)
+                                .map_or(false, |t| t.load_gen.get() == load_gen)
+                        };
+                        if !is_current {
+                            return;
+                        }
                         let search_text = window.imp().search_entry.text();
                         if store.n_items() == 0 {
                             content_stack.set_visible_child_name("empty");
@@ -480,13 +498,16 @@ impl WrenWindow {
     }
 
     fn apply_zoom(&self) {
-        let icon_size = self.icon_size_for_zoom(self.imp().zoom_level.get());
+        let level = self.imp().zoom_level.get();
+        let grid_size = self.icon_size_for_zoom(level);
+        let list_size = self.list_icon_size_for_zoom(level);
         let Some(idx) = self.current_tab_index() else {
             return;
         };
         let tabs = self.imp().tabs.borrow();
         if let Some(tab) = tabs.get(idx) {
-            tab.file_grid.set_icon_size(icon_size);
+            tab.file_grid.set_icon_size(grid_size);
+            tab.file_list.set_icon_size(list_size);
         }
     }
 
@@ -497,6 +518,16 @@ impl WrenWindow {
             4 => 96,
             5 => 128,
             _ => 64,
+        }
+    }
+
+    fn list_icon_size_for_zoom(&self, level: i32) -> u32 {
+        match level {
+            1 => 16,
+            2 => 20,
+            4 => 32,
+            5 => 40,
+            _ => 24,
         }
     }
 
@@ -1548,6 +1579,32 @@ impl WrenWindow {
 
         group.add(&row);
         page.add(&group);
+
+        // Cache group
+        let cache_group = adw::PreferencesGroup::new();
+        cache_group.set_title("Cache");
+        cache_group.set_description(Some("Thumbnail cache speeds up browsing by keeping scaled images in memory."));
+
+        let cache_row = adw::ActionRow::new();
+        cache_row.set_title("Thumbnail Cache");
+        cache_row.set_subtitle("Free memory used by cached thumbnails");
+
+        let clear_btn = gtk4::Button::with_label("Clear Cache");
+        clear_btn.add_css_class("destructive-action");
+        clear_btn.set_valign(gtk4::Align::Center);
+        clear_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                crate::file_view::cell::clear_thumbnail_cache();
+                window.show_toast("Thumbnail cache cleared");
+            }
+        ));
+
+        cache_row.add_suffix(&clear_btn);
+        cache_group.add(&cache_row);
+        page.add(&cache_group);
+
         dialog.add(&page);
         dialog.present(Some(self));
     }
