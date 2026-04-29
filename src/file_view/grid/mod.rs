@@ -141,23 +141,29 @@ impl WrenFileGrid {
             let view = drag_src.widget()?.downcast::<gtk4::GridView>().ok()?;
             let model = view.model()?.downcast::<gtk4::MultiSelection>().ok()?;
             let bitset = model.selection();
-            let uris: Vec<String> = (0..bitset.size())
+            let files: Vec<gio::File> = (0..bitset.size())
                 .filter_map(|i| {
                     let pos = bitset.nth(i as u32);
                     model
                         .item(pos)
                         .and_downcast::<FileObject>()
-                        .map(|obj| obj.file().uri().to_string())
+                        .map(|obj| obj.file().clone())
                 })
                 .collect();
-            if uris.is_empty() {
+            if files.is_empty() {
                 return None;
             }
-            let uri_list = uris.join("\r\n") + "\r\n";
-            Some(gdk::ContentProvider::for_bytes(
+            let uri_list = files.iter()
+                .map(|f| f.uri().to_string())
+                .collect::<Vec<_>>()
+                .join("\r\n") + "\r\n";
+            let bytes_provider = gdk::ContentProvider::for_bytes(
                 "text/uri-list",
                 &glib::Bytes::from(uri_list.as_bytes()),
-            ))
+            );
+            let file_list = gdk::FileList::from_array(&files);
+            let filelist_provider = gdk::ContentProvider::for_value(&file_list.to_value());
+            Some(gdk::ContentProvider::new_union(&[bytes_provider, filelist_provider]))
         });
         imp.grid_view.add_controller(drag);
     }
