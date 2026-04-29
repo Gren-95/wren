@@ -839,6 +839,7 @@ impl WrenWindow {
                         #[weak]
                         window,
                         async move {
+                            log_op("mkdir", &new_dir, None);
                             match new_dir
                                 .make_directory_future(glib::Priority::DEFAULT)
                                 .await
@@ -853,6 +854,7 @@ impl WrenWindow {
                                     window.reload();
                                 }
                                 Err(e) => {
+                                    log_err("mkdir", &new_dir, None, &e);
                                     window.show_toast(&format!("Could not create folder: {e}"))
                                 }
                             }
@@ -906,6 +908,11 @@ impl WrenWindow {
                         #[weak]
                         window,
                         async move {
+                            eprintln!(
+                                "[wren] rename: {} -> {}",
+                                fmt_path(&file),
+                                new_name
+                            );
                             match file
                                 .set_display_name_future(&new_name, glib::Priority::DEFAULT)
                                 .await
@@ -923,7 +930,13 @@ impl WrenWindow {
                                     window.update_undo_actions();
                                     window.reload();
                                 }
-                                Err(e) => window.show_toast(&format!("Could not rename: {e}")),
+                                Err(e) => {
+                                    eprintln!(
+                                        "[wren] rename failed: {}: {e}",
+                                        fmt_path(&file)
+                                    );
+                                    window.show_toast(&format!("Could not rename: {e}"))
+                                }
                             }
                         }
                     ));
@@ -1066,12 +1079,14 @@ impl WrenWindow {
     async fn do_trash_files(&self, files: Vec<gio::File>) {
         let mut not_supported: Vec<gio::File> = Vec::new();
         for file in &files {
+            log_op("trash", file, None);
             match file.trash_future(glib::Priority::DEFAULT).await {
                 Ok(()) => {}
                 Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
                     not_supported.push(file.clone());
                 }
                 Err(e) => {
+                    log_err("trash", file, None, &e);
                     self.show_toast(&format!("Could not trash: {e}"));
                 }
             }
@@ -1112,7 +1127,9 @@ impl WrenWindow {
                         window,
                         async move {
                             for f in to_delete {
-                                if let Err(e) = delete_recursive(f).await {
+                                log_op("delete (trash unsupported)", &f, None);
+                                if let Err(e) = delete_recursive(f.clone()).await {
+                                    log_err("delete (trash unsupported)", &f, None, &e);
                                     window.show_toast(&format!("Could not delete: {e}"));
                                 }
                             }
@@ -1159,7 +1176,9 @@ impl WrenWindow {
                         window,
                         async move {
                             for file in files {
-                                if let Err(e) = delete_recursive(file).await {
+                                log_op("delete", &file, None);
+                                if let Err(e) = delete_recursive(file.clone()).await {
+                                    log_err("delete", &file, None, &e);
                                     window.show_toast(&format!("Could not delete: {e}"));
                                     return;
                                 }
@@ -1243,13 +1262,18 @@ impl WrenWindow {
                         continue;
                     }
                     let dest = unique_dest(&dest_dir, &name);
+                    let action = if is_cut { "move" } else { "copy" };
+                    log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest).await {
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone()).await {
+                        log_err(action, file, Some(&dest), &e);
                         window.show_toast(&format!("Could not paste: {e}"));
                         return;
                     }
                     if is_cut {
+                        log_op("delete (post-move)", file, None);
                         if let Err(e) = delete_recursive(file.clone()).await {
+                            log_err("delete (post-move)", file, None, &e);
                             window.show_toast(&format!("Could not move: {e}"));
                             return;
                         }
@@ -1312,9 +1336,21 @@ impl WrenWindow {
             }
         };
 
+        eprintln!(
+            "[wren] symlink: {} -> {}",
+            link_path.display(),
+            target_path.display()
+        );
         match std::os::unix::fs::symlink(&target_path, &link_path) {
             Ok(()) => self.reload(),
-            Err(e) => self.show_toast(&format!("Could not create link: {e}")),
+            Err(e) => {
+                eprintln!(
+                    "[wren] symlink failed: {} -> {}: {e}",
+                    link_path.display(),
+                    target_path.display()
+                );
+                self.show_toast(&format!("Could not create link: {e}"))
+            }
         }
     }
 
@@ -1722,6 +1758,11 @@ impl WrenWindow {
                 old_name,
                 new_name,
             } => {
+                eprintln!(
+                    "[wren] undo rename: {} -> {}",
+                    fmt_path(&file),
+                    old_name
+                );
                 glib::spawn_future_local(glib::clone!(
                     #[weak(rename_to = window)]
                     self,
@@ -1749,6 +1790,7 @@ impl WrenWindow {
                 ));
             }
             undo::UndoOp::NewFolder { dir } => {
+                log_op("undo mkdir (trash)", &dir, None);
                 glib::spawn_future_local(glib::clone!(
                     #[weak(rename_to = window)]
                     self,
@@ -1779,6 +1821,11 @@ impl WrenWindow {
                 old_name,
                 new_name,
             } => {
+                eprintln!(
+                    "[wren] redo rename: {} -> {}",
+                    fmt_path(&file),
+                    new_name
+                );
                 glib::spawn_future_local(glib::clone!(
                     #[weak(rename_to = window)]
                     self,
@@ -1806,6 +1853,7 @@ impl WrenWindow {
                 ));
             }
             undo::UndoOp::NewFolder { dir } => {
+                log_op("redo mkdir", &dir, None);
                 glib::spawn_future_local(glib::clone!(
                     #[weak(rename_to = window)]
                     self,
@@ -1949,17 +1997,12 @@ impl WrenWindow {
                 #[weak(rename_to = window)]
                 self,
                 async move {
-                    match file
-                        .copy_future(
-                            &dest_file,
-                            gio::FileCopyFlags::NONE,
-                            glib::Priority::DEFAULT,
-                        )
-                        .0
-                        .await
-                    {
-                        Err(e) => window.show_toast(&format!("Could not duplicate: {e}")),
-                        Ok(()) => window.reload(),
+                    log_op("duplicate", &file, Some(&dest_file));
+                    if let Err(e) = copy_recursive(file.clone(), dest_file.clone()).await {
+                        log_err("duplicate", &file, Some(&dest_file), &e);
+                        window.show_toast(&format!("Could not duplicate: {e}"));
+                    } else {
+                        window.reload();
                     }
                 }
             ));
@@ -1986,12 +2029,17 @@ impl WrenWindow {
                     // Dropping a file onto its own parent dir is a no-op.
                     if dest_dir.child(&name).equal(file) { continue; }
                     let dest = unique_dest(&dest_dir, &name);
-                    if let Err(e) = copy_recursive(file.clone(), dest).await {
+                    let action = if is_move { "drop-move" } else { "drop-copy" };
+                    log_op(action, file, Some(&dest));
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone()).await {
+                        log_err(action, file, Some(&dest), &e);
                         window.show_toast(&format!("Could not copy: {e}"));
                         return;
                     }
                     if is_move {
+                        log_op("delete (post-move)", file, None);
                         if let Err(e) = delete_recursive(file.clone()).await {
+                            log_err("delete (post-move)", file, None, &e);
                             window.show_toast(&format!("Could not remove source: {e}"));
                             return;
                         }
@@ -2149,6 +2197,30 @@ impl WrenWindow {
 //
 // Iterative (non-recursive) implementations avoid the Box::pin overhead and
 // potential stack issues with deeply-nested directory trees.
+
+// ── Operation logging ─────────────────────────────────────────────────────
+// Stderr output for every destructive file action so users running from a
+// terminal can see exactly what is being done.
+
+fn fmt_path(f: &gio::File) -> String {
+    f.path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| f.uri().to_string())
+}
+
+fn log_op(action: &str, src: &gio::File, dest: Option<&gio::File>) {
+    match dest {
+        Some(d) => eprintln!("[wren] {action}: {} -> {}", fmt_path(src), fmt_path(d)),
+        None => eprintln!("[wren] {action}: {}", fmt_path(src)),
+    }
+}
+
+fn log_err(action: &str, src: &gio::File, dest: Option<&gio::File>, err: &impl std::fmt::Display) {
+    match dest {
+        Some(d) => eprintln!("[wren] {action} failed: {} -> {}: {err}", fmt_path(src), fmt_path(d)),
+        None => eprintln!("[wren] {action} failed: {}: {err}", fmt_path(src)),
+    }
+}
 
 // Returns a non-colliding child path under dest_dir. If `dest_dir/name` is
 // free, returns that. Otherwise appends " (Copy)" / " (Copy 2)" / ... to the
