@@ -132,8 +132,20 @@ impl WrenFileList {
         let imp = imp::WrenFileList::from_obj(self);
         let drag = gtk4::DragSource::new();
         drag.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
-        drag.connect_prepare(move |drag_src, _, _| {
+        drag.connect_prepare(move |drag_src, x, y| {
             let view = drag_src.widget()?.downcast::<gtk4::ListView>().ok()?;
+            let on_item = view
+                .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
+                .map_or(false, |w| {
+                    let mut cur: Option<gtk4::Widget> = Some(w);
+                    while let Some(widget) = cur {
+                        if widget.is::<WrenFileRow>() { return true; }
+                        if widget.is::<gtk4::ListView>() { return false; }
+                        cur = widget.parent();
+                    }
+                    false
+                });
+            if !on_item { return None; }
             let model = view.model()?.downcast::<gtk4::MultiSelection>().ok()?;
             let bitset = model.selection();
             let files: Vec<gio::File> = (0..bitset.size())
