@@ -24,7 +24,7 @@ A GTK4/libadwaita file manager written in Rust, inspired by GNOME Nautilus.
 
 ## Screenshots
 
-> Coming soon
+![Wren main window showing the home directory in grid view](data/screenshots/main-window.png)
 
 ## Requirements
 
