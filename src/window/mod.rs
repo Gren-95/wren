@@ -1232,41 +1232,11 @@ impl WrenWindow {
                     let Some(name) = file.basename() else {
                         continue;
                     };
-
-                    let dest = dest_dir.child(&name);
-
-                    if is_cut && dest.equal(file) {
+                    // Cut + paste back into the source dir is a no-op.
+                    if is_cut && dest_dir.child(&name).equal(file) {
                         continue;
                     }
-
-                    let dest = if !is_cut && dest.equal(file) {
-                        let stem = name
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        let ext = name
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .map(|e| format!(".{}", e))
-                            .unwrap_or_default();
-                        let candidate = dest_dir.child(&format!("{} (Copy){}", stem, ext));
-                        if candidate.query_exists(gio::Cancellable::NONE) {
-                            let mut i = 2u32;
-                            loop {
-                                let c = dest_dir
-                                    .child(&format!("{} (Copy {}){}", stem, i, ext));
-                                if !c.query_exists(gio::Cancellable::NONE) {
-                                    break c;
-                                }
-                                i += 1;
-                            }
-                        } else {
-                            candidate
-                        }
-                    } else {
-                        dest
-                    };
+                    let dest = unique_dest(&dest_dir, &name);
 
                     if let Err(e) = copy_recursive(file.clone(), dest).await {
                         window.show_toast(&format!("Could not paste: {e}"));
@@ -2007,8 +1977,9 @@ impl WrenWindow {
             async move {
                 for file in &files {
                     let Some(name) = file.basename() else { continue };
-                    let dest = dest_dir.child(&name);
-                    if dest.equal(file) { continue; }
+                    // Dropping a file onto its own parent dir is a no-op.
+                    if dest_dir.child(&name).equal(file) { continue; }
+                    let dest = unique_dest(&dest_dir, &name);
                     if let Err(e) = copy_recursive(file.clone(), dest).await {
                         window.show_toast(&format!("Could not copy: {e}"));
                         return;
@@ -2173,6 +2144,38 @@ impl WrenWindow {
 // Iterative (non-recursive) implementations avoid the Box::pin overhead and
 // potential stack issues with deeply-nested directory trees.
 
+// Returns a non-colliding child path under dest_dir. If `dest_dir/name` is
+// free, returns that. Otherwise appends " (Copy)" / " (Copy 2)" / ... to the
+// stem until an unused name is found.
+fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> gio::File {
+    let dest = dest_dir.child(name);
+    if !dest.query_exists(gio::Cancellable::NONE) {
+        return dest;
+    }
+    let stem = name
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let ext = name
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{}", e))
+        .unwrap_or_default();
+    let candidate = dest_dir.child(&format!("{} (Copy){}", stem, ext));
+    if !candidate.query_exists(gio::Cancellable::NONE) {
+        return candidate;
+    }
+    let mut i = 2u32;
+    loop {
+        let c = dest_dir.child(&format!("{} (Copy {}){}", stem, i, ext));
+        if !c.query_exists(gio::Cancellable::NONE) {
+            return c;
+        }
+        i += 1;
+    }
+}
+
 async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Error> {
     // Check whether the top-level source is a directory.
     let src_info = src
@@ -2184,7 +2187,11 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
         .await?;
 
     if src_info.file_type() != gio::FileType::Directory {
-        let (fut, _) = src.copy_future(&dest, gio::FileCopyFlags::NONE, glib::Priority::DEFAULT);
+        let (fut, _) = src.copy_future(
+            &dest,
+            gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
+            glib::Priority::DEFAULT,
+        );
         return fut.await;
     }
 
@@ -2219,7 +2226,7 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
                 } else {
                     let (fut, _) = child_src.copy_future(
                         &child_dest,
-                        gio::FileCopyFlags::NONE,
+                        gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
                         glib::Priority::DEFAULT,
                     );
                     fut.await?;

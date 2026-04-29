@@ -188,8 +188,17 @@ impl WrenBreadcrumbBar {
 
     pub fn navigate_to_text(&self, text: &str) {
         let text = text.trim();
-        let file = if text.starts_with("file://") {
+        if text.is_empty() {
+            return;
+        }
+        let file = if has_uri_scheme(text) {
             gio::File::for_uri(text)
+        } else if let Some(rest) = text.strip_prefix("~/") {
+            let mut p = glib::home_dir();
+            p.push(rest);
+            gio::File::for_path(p)
+        } else if text == "~" {
+            gio::File::for_path(glib::home_dir())
         } else {
             gio::File::for_path(text)
         };
@@ -200,6 +209,18 @@ impl WrenBreadcrumbBar {
             win.navigate_to(file);
         }
     }
+}
+
+// True for strings like "file://x", "trash:///", "recent:///", "smb://...".
+// Excludes Windows-style drive letters by requiring at least 2 leading chars.
+fn has_uri_scheme(text: &str) -> bool {
+    let Some(idx) = text.find(':') else { return false };
+    if idx < 2 {
+        return false;
+    }
+    text[..idx]
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
 }
 
 fn friendly_name_for(file: &gio::File) -> String {
