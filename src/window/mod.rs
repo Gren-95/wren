@@ -131,6 +131,9 @@ impl WrenWindow {
             let mut tabs = imp.tabs.borrow_mut();
             if idx < tabs.len() {
                 tabs[idx].cancel_monitor();
+                if let Some(model) = tabs[idx].dir_model.as_ref() {
+                    model.cancel();
+                }
                 tabs.remove(idx);
             }
         }
@@ -680,21 +683,24 @@ impl WrenWindow {
     pub fn apply_hidden_filter(&self) {
         let imp = self.imp();
         let show_hidden = imp.show_hidden.get();
-        let text = imp.search_entry.text().to_lowercase();
-        let Some(idx) = self.current_tab_index() else {
-            return;
-        };
+        let current_idx = self.current_tab_index();
         let tabs = imp.tabs.borrow();
-        if let Some(tab) = tabs.get(idx) {
-            if let Some(model) = tab.dir_model.as_ref() {
-                model.set_filter(&text, show_hidden);
-                if model.store.n_items() == 0 {
-                    tab.content_stack.set_visible_child_name("empty");
-                } else if model.filter_model.n_items() == 0 && !text.is_empty() {
-                    tab.content_stack.set_visible_child_name("no-results");
-                } else {
-                    tab.content_stack.set_visible_child_name("files");
-                }
+        for (i, tab) in tabs.iter().enumerate() {
+            let Some(model) = tab.dir_model.as_ref() else { continue };
+            // Background tabs have no live search; only the current tab's
+            // search_entry text matters for content_stack state.
+            let text = if Some(i) == current_idx {
+                imp.search_entry.text().to_lowercase()
+            } else {
+                String::new()
+            };
+            model.set_filter(&text, show_hidden);
+            if model.store.n_items() == 0 {
+                tab.content_stack.set_visible_child_name("empty");
+            } else if model.filter_model.n_items() == 0 && !text.is_empty() {
+                tab.content_stack.set_visible_child_name("no-results");
+            } else {
+                tab.content_stack.set_visible_child_name("files");
             }
         }
     }

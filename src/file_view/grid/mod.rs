@@ -439,7 +439,10 @@ mod imp {
             )));
             self.grid_view.set_min_columns(2);
             self.grid_view.set_max_columns(16);
-            self.grid_view.set_enable_rubberband(true);
+            // Rubber-band selection disabled: it competes with the per-cell
+            // DragSource and shows a brief selection rect when starting a drag
+            // from a selected cell. Multi-select via Ctrl/Shift+click.
+            self.grid_view.set_enable_rubberband(false);
             self.grid_view.set_vexpand(true);
             self.grid_view.set_hexpand(true);
             self.grid_view.set_overflow(gtk4::Overflow::Hidden);

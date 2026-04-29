@@ -442,7 +442,10 @@ mod imp {
                 true,
                 Rc::clone(&self.bound_rows),
             )));
-            self.list_view.set_enable_rubberband(true);
+            // Rubber-band selection disabled: it competes with the per-row
+            // DragSource and shows a brief selection rect when starting a drag
+            // from a selected row. Multi-select via Ctrl/Shift+click.
+            self.list_view.set_enable_rubberband(false);
             self.list_view.set_vexpand(true);
             self.list_view.set_hexpand(true);
             self.list_view.set_overflow(gtk4::Overflow::Hidden);
