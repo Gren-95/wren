@@ -182,7 +182,7 @@ impl WrenFileList {
             imp.list_view,
             move |_, _, x, y| {
                 let on_item = lv
-                    .pick(x, y, gtk4::PickFlags::DEFAULT)
+                    .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
                     .map_or(false, |w| {
                         let mut cur: Option<gtk4::Widget> = Some(w);
                         while let Some(widget) = cur {

@@ -570,6 +570,9 @@ impl WrenWindow {
                 tab.sort_reversed = reversed;
             }
         }
+        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
+            app.set_sort_reversed_pref(reversed);
+        }
         self.apply_sort();
         self.update_list_sort_headers();
     }
@@ -1811,6 +1814,7 @@ impl WrenWindow {
             "win.cut",
             "win.copy",
             "win.create-link",
+            "win.duplicate",
             "win.batch-rename",
         ] {
             self.action_set_enabled(action, has_selection);
@@ -1915,7 +1919,7 @@ impl WrenWindow {
                 #[weak(rename_to = window)]
                 self,
                 async move {
-                    if let Err(e) = file
+                    match file
                         .copy_future(
                             &dest_file,
                             gio::FileCopyFlags::NONE,
@@ -1924,7 +1928,8 @@ impl WrenWindow {
                         .0
                         .await
                     {
-                        window.show_toast(&format!("Could not duplicate: {e}"));
+                        Err(e) => window.show_toast(&format!("Could not duplicate: {e}")),
+                        Ok(()) => window.reload(),
                     }
                 }
             ));
