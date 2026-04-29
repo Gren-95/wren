@@ -154,6 +154,10 @@ impl WrenFileCell {
         }
     }
 
+    pub fn bound_file_object(&self) -> Option<FileObject> {
+        self.imp().bound_file.borrow().clone()
+    }
+
     pub fn bind(&self, file_obj: &FileObject, icon_size: u32, show_extension: bool) {
         let imp = self.imp();
         let px = icon_size as i32;

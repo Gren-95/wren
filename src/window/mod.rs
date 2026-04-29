@@ -86,8 +86,6 @@ impl WrenWindow {
         let menu = self.context_menu_model();
         tab.file_grid.setup_context_menu(&menu);
         tab.file_list.setup_context_menu(&menu);
-        tab.file_grid.setup_drag_source();
-        tab.file_list.setup_drag_source();
         tab.file_grid.setup_drop_target();
         tab.file_list.setup_drop_target();
         tab.file_grid.setup_empty_area_click();
@@ -1958,8 +1956,10 @@ impl WrenWindow {
         }
     }
 
-    pub fn drop_files(&self, files: Vec<gio::File>, is_move: bool) {
-        let dest_dir = {
+    pub fn drop_files(&self, files: Vec<gio::File>, dest: Option<gio::File>, is_move: bool) {
+        let dest_dir = if let Some(d) = dest {
+            d
+        } else {
             let Some(idx) = self.current_tab_index() else { return };
             let tabs = self.imp().tabs.borrow();
             match tabs.get(idx).and_then(|t| t.navigation.current().cloned()) {

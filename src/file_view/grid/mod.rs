@@ -35,7 +35,51 @@ fn make_cell_factory(
 
     factory.connect_setup(|_, obj| {
         let list_item = obj.downcast_ref::<gtk4::ListItem>().unwrap();
-        list_item.set_child(Some(&WrenFileCell::new()));
+        let cell = WrenFileCell::new();
+
+        // DragSource on the cell rather than the view so it fires before the
+        // view's rubber-band gesture — pressing on a cell starts a drag;
+        // pressing on empty space starts rubber-band selection.
+        let drag = gtk4::DragSource::new();
+        drag.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
+        drag.connect_prepare(|drag_src, _x, _y| {
+            let mut w = drag_src.widget()?.parent();
+            let grid_view = loop {
+                match w {
+                    Some(ref p) if p.is::<gtk4::GridView>() => {
+                        break p.clone().downcast::<gtk4::GridView>().ok()?;
+                    }
+                    Some(ref p) => w = p.parent(),
+                    None => return None,
+                }
+            };
+            let model = grid_view.model()?.downcast::<gtk4::MultiSelection>().ok()?;
+            let bitset = model.selection();
+            if bitset.is_empty() { return None; }
+            let files: Vec<gio::File> = (0..bitset.size())
+                .filter_map(|i| {
+                    model.item(bitset.nth(i as u32))
+                        .and_downcast::<FileObject>()
+                        .map(|obj| obj.file().clone())
+                })
+                .collect();
+            if files.is_empty() { return None; }
+            let uri_list = files.iter()
+                .map(|f| f.uri().to_string())
+                .collect::<Vec<_>>()
+                .join("\r\n") + "\r\n";
+            let bytes = gdk::ContentProvider::for_bytes(
+                "text/uri-list",
+                &glib::Bytes::from(uri_list.as_bytes()),
+            );
+            let filelist = gdk::ContentProvider::for_value(
+                &gdk::FileList::from_array(&files).to_value(),
+            );
+            Some(gdk::ContentProvider::new_union(&[bytes, filelist]))
+        });
+        cell.add_controller(drag);
+
+        list_item.set_child(Some(&cell));
     });
 
     {
@@ -133,55 +177,6 @@ impl WrenFileGrid {
         )));
     }
 
-    pub fn setup_drag_source(&self) {
-        let imp = imp::WrenFileGrid::from_obj(self);
-        let drag = gtk4::DragSource::new();
-        drag.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
-        drag.connect_prepare(move |drag_src, x, y| {
-            let view = drag_src.widget()?.downcast::<gtk4::GridView>().ok()?;
-            // Only start a drag when the pointer is over a file cell; otherwise
-            // let the view's rubber-band selection handle the gesture.
-            let on_item = view
-                .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
-                .map_or(false, |w| {
-                    let mut cur: Option<gtk4::Widget> = Some(w);
-                    while let Some(widget) = cur {
-                        if widget.is::<WrenFileCell>() { return true; }
-                        if widget.is::<gtk4::GridView>() { return false; }
-                        cur = widget.parent();
-                    }
-                    false
-                });
-            if !on_item { return None; }
-            let model = view.model()?.downcast::<gtk4::MultiSelection>().ok()?;
-            let bitset = model.selection();
-            let files: Vec<gio::File> = (0..bitset.size())
-                .filter_map(|i| {
-                    let pos = bitset.nth(i as u32);
-                    model
-                        .item(pos)
-                        .and_downcast::<FileObject>()
-                        .map(|obj| obj.file().clone())
-                })
-                .collect();
-            if files.is_empty() {
-                return None;
-            }
-            let uri_list = files.iter()
-                .map(|f| f.uri().to_string())
-                .collect::<Vec<_>>()
-                .join("\r\n") + "\r\n";
-            let bytes_provider = gdk::ContentProvider::for_bytes(
-                "text/uri-list",
-                &glib::Bytes::from(uri_list.as_bytes()),
-            );
-            let file_list = gdk::FileList::from_array(&files);
-            let filelist_provider = gdk::ContentProvider::for_value(&file_list.to_value());
-            Some(gdk::ContentProvider::new_union(&[bytes_provider, filelist_provider]))
-        });
-        imp.grid_view.add_controller(drag);
-    }
-
     pub fn setup_empty_area_click(&self) {
         let imp = imp::WrenFileGrid::from_obj(self);
         let gesture = gtk4::GestureClick::new();
@@ -222,7 +217,7 @@ impl WrenFileGrid {
             imp.grid_view,
             #[upgrade_or]
             false,
-            move |drop_target, value, _x, _y| {
+            move |drop_target, value, x, y| {
                 let Ok(file_list) = value.get::<gdk::FileList>() else {
                     return false;
                 };
@@ -230,6 +225,23 @@ impl WrenFileGrid {
                 if files.is_empty() {
                     return false;
                 }
+                // If the pointer is over a folder, drop into it; otherwise into
+                // the current directory.
+                let folder_dest = gv
+                    .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
+                    .and_then(|w| {
+                        let mut cur: Option<gtk4::Widget> = Some(w);
+                        while let Some(widget) = cur {
+                            if let Some(cell) = widget.downcast_ref::<WrenFileCell>() {
+                                return cell.bound_file_object().and_then(|f| {
+                                    if f.is_directory() { Some(f.file().clone()) } else { None }
+                                });
+                            }
+                            if widget.is::<gtk4::GridView>() { return None; }
+                            cur = widget.parent();
+                        }
+                        None
+                    });
                 let action = drop_target
                     .current_drop()
                     .map(|d| d.actions())
@@ -237,7 +249,7 @@ impl WrenFileGrid {
                 let is_move = !action.contains(gdk::DragAction::COPY)
                     && action.contains(gdk::DragAction::MOVE);
                 if let Some(win) = gv.root().and_downcast::<crate::window::WrenWindow>() {
-                    win.drop_files(files, is_move);
+                    win.drop_files(files, folder_dest, is_move);
                 }
                 true
             }

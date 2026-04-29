@@ -18,6 +18,7 @@ pub struct WrenFileRow {
     pub modified: TemplateChild<gtk4::Label>,
 
     pub icon_size: std::cell::Cell<u32>,
+    pub bound_file: std::cell::RefCell<Option<crate::model::FileObject>>,
 }
 
 #[glib::object_subclass]

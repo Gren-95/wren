@@ -27,8 +27,13 @@ impl WrenFileRow {
         imp::WrenFileRow::from_obj(self)
     }
 
+    pub fn bound_file_object(&self) -> Option<FileObject> {
+        self.imp().bound_file.borrow().clone()
+    }
+
     pub fn bind(&self, file_obj: &FileObject, icon_size: u32, show_extension: bool) {
         let imp = self.imp();
+        *imp.bound_file.borrow_mut() = Some(file_obj.clone());
         imp.icon_size.set(icon_size);
         imp.icon.set_pixel_size(icon_size as i32);
 
@@ -70,6 +75,7 @@ impl WrenFileRow {
 
     pub fn unbind(&self) {
         let imp = self.imp();
+        *imp.bound_file.borrow_mut() = None;
         imp.name.set_label("");
         imp.content_type.set_label("");
         imp.size.set_label("");
