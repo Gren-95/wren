@@ -120,3 +120,19 @@ listview > row:selected {
   color: @accent_color;
   font-weight: 600;
 }
+
+/* ── Drag-and-drop folder hover ──────────────────────────────────────────── */
+
+.wren-drop-hover {
+  background-color: alpha(@accent_color, 0.25);
+  border-radius: 8px;
+  outline: 2px solid alpha(@accent_color, 0.6);
+  outline-offset: -2px;
+}
+
+/* Breadcrumb segments highlight when dragging files over them */
+button.wren-breadcrumb:drop(active) {
+  background-color: alpha(@accent_color, 0.25);
+  outline: 2px solid alpha(@accent_color, 0.6);
+  outline-offset: -2px;
+}

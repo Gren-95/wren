@@ -2,6 +2,7 @@ mod imp;
 
 use adw::subclass::prelude::*;
 use glib::Object;
+use gtk4::gdk;
 use gtk4::prelude::*;
 
 glib::wrapper! {
@@ -91,6 +92,43 @@ impl WrenBreadcrumbBar {
                     }
                 });
                 btn.add_controller(mid_gesture);
+
+                // Drop target: dragging files onto an ancestor crumb moves/copies
+                // them into that folder.
+                let drop = gtk4::DropTarget::new(
+                    gdk::FileList::static_type(),
+                    gdk::DragAction::COPY | gdk::DragAction::MOVE,
+                );
+                let dest_file = ancestor.clone();
+                drop.connect_drop(glib::clone!(
+                    #[weak]
+                    btn,
+                    #[upgrade_or]
+                    false,
+                    move |drop_target, value, _x, _y| {
+                        let Ok(file_list) = value.get::<gdk::FileList>() else {
+                            return false;
+                        };
+                        let files = file_list.files();
+                        if files.is_empty() {
+                            return false;
+                        }
+                        let action = drop_target
+                            .current_drop()
+                            .map(|d| d.actions())
+                            .unwrap_or(gdk::DragAction::COPY);
+                        let is_move = !action.contains(gdk::DragAction::COPY)
+                            && action.contains(gdk::DragAction::MOVE);
+                        if let Some(win) = btn
+                            .root()
+                            .and_downcast::<crate::window::WrenWindow>()
+                        {
+                            win.drop_files(files, Some(dest_file.clone()), is_move);
+                        }
+                        true
+                    }
+                ));
+                btn.add_controller(drop);
 
                 crumb_box.append(&btn);
 
