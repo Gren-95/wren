@@ -838,9 +838,11 @@ impl WrenWindow {
                                 .await
                             {
                                 Ok(()) => {
-                                    window.imp().undo_stack.borrow_mut().push(
+                                    let imp = window.imp();
+                                    imp.undo_stack.borrow_mut().push(
                                         undo::UndoOp::NewFolder { dir: new_dir },
                                     );
+                                    imp.redo_stack.borrow_mut().clear();
                                     window.update_undo_actions();
                                     window.reload();
                                 }
@@ -903,13 +905,15 @@ impl WrenWindow {
                                 .await
                             {
                                 Ok(new_file) => {
-                                    window.imp().undo_stack.borrow_mut().push(
+                                    let imp = window.imp();
+                                    imp.undo_stack.borrow_mut().push(
                                         undo::UndoOp::Rename {
                                             file: new_file,
                                             old_name,
                                             new_name,
                                         },
                                     );
+                                    imp.redo_stack.borrow_mut().clear();
                                     window.update_undo_actions();
                                     window.reload();
                                 }
@@ -1054,57 +1058,65 @@ impl WrenWindow {
     }
 
     async fn do_trash_files(&self, files: Vec<gio::File>) {
+        let mut not_supported: Vec<gio::File> = Vec::new();
         for file in &files {
             match file.trash_future(glib::Priority::DEFAULT).await {
                 Ok(()) => {}
                 Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
-                    let dialog = adw::AlertDialog::new(
-                        Some("Cannot Move to Trash"),
-                        Some("This location does not support trash. Delete permanently instead?"),
-                    );
-                    dialog.add_response("cancel", "Cancel");
-                    dialog.add_response("delete", "Delete Permanently");
-                    dialog.set_response_appearance(
-                        "delete",
-                        adw::ResponseAppearance::Destructive,
-                    );
-                    dialog.set_default_response(Some("cancel"));
-                    dialog.set_close_response("cancel");
-                    let file_clone = file.clone();
-                    dialog.connect_response(
-                        None,
-                        glib::clone!(
-                            #[weak(rename_to = window)]
-                            self,
-                            move |_, response| {
-                                if response != "delete" {
-                                    return;
-                                }
-                                let f = file_clone.clone();
-                                glib::spawn_future_local(glib::clone!(
-                                    #[weak]
-                                    window,
-                                    async move {
-                                        if let Err(e) = delete_recursive(f).await {
-                                            window.show_toast(&format!("Could not delete: {e}"));
-                                        } else {
-                                            window.reload();
-                                        }
-                                    }
-                                ));
-                            }
-                        ),
-                    );
-                    dialog.present(Some(self));
-                    return;
+                    not_supported.push(file.clone());
                 }
                 Err(e) => {
                     self.show_toast(&format!("Could not trash: {e}"));
-                    return;
                 }
             }
         }
         self.reload();
+
+        if not_supported.is_empty() {
+            return;
+        }
+
+        let count = not_supported.len();
+        let body = if count == 1 {
+            "This location does not support trash. Delete permanently instead?".to_string()
+        } else {
+            format!(
+                "{count} items are on a location that does not support trash. \
+                 Delete them permanently instead?"
+            )
+        };
+        let dialog = adw::AlertDialog::new(Some("Cannot Move to Trash"), Some(&body));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete Permanently");
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| {
+                    if response != "delete" {
+                        return;
+                    }
+                    let to_delete = not_supported.clone();
+                    glib::spawn_future_local(glib::clone!(
+                        #[weak]
+                        window,
+                        async move {
+                            for f in to_delete {
+                                if let Err(e) = delete_recursive(f).await {
+                                    window.show_toast(&format!("Could not delete: {e}"));
+                                }
+                            }
+                            window.reload();
+                        }
+                    ));
+                }
+            ),
+        );
+        dialog.present(Some(self));
     }
 
     pub fn delete_permanently(&self) {
@@ -1166,6 +1178,7 @@ impl WrenWindow {
             .replace(Some((files, false)));
         self.clipboard().set_text(&uris.join("\r\n"));
         self.update_cut_indicator(&[]);
+        self.update_selection_actions();
         self.show_toast("Copied");
     }
 
@@ -1180,6 +1193,7 @@ impl WrenWindow {
             .replace(Some((files, true)));
         self.clipboard().set_text(&uris.join("\r\n"));
         self.update_cut_indicator(&uris);
+        self.update_selection_actions();
         self.show_toast("Cut");
     }
 
@@ -1268,6 +1282,7 @@ impl WrenWindow {
                 if is_cut {
                     window.imp().clipboard_files.replace(None);
                     window.update_cut_indicator(&[]);
+                    window.update_selection_actions();
                 }
                 window.reload();
             }
@@ -1740,11 +1755,13 @@ impl WrenWindow {
                             .await
                         {
                             Ok(restored_file) => {
+                                // file is now back at old_name; redo would
+                                // re-apply: rename old_name → new_name.
                                 window.imp().redo_stack.borrow_mut().push(
                                     undo::UndoOp::Rename {
                                         file: restored_file,
-                                        old_name: new_name,
-                                        new_name: old_name,
+                                        old_name,
+                                        new_name,
                                     },
                                 );
                                 window.update_undo_actions();
@@ -1762,6 +1779,9 @@ impl WrenWindow {
                     async move {
                         match dir.trash_future(glib::Priority::DEFAULT).await {
                             Ok(()) => {
+                                window.imp().redo_stack.borrow_mut().push(
+                                    undo::UndoOp::NewFolder { dir },
+                                );
                                 window.update_undo_actions();
                                 window.reload();
                             }
@@ -1780,7 +1800,7 @@ impl WrenWindow {
         match op {
             undo::UndoOp::Rename {
                 file,
-                old_name: _,
+                old_name,
                 new_name,
             } => {
                 glib::spawn_future_local(glib::clone!(
@@ -1791,7 +1811,16 @@ impl WrenWindow {
                             .set_display_name_future(&new_name, glib::Priority::DEFAULT)
                             .await
                         {
-                            Ok(_) => {
+                            Ok(restored_file) => {
+                                // file is now at new_name again; undo would
+                                // revert to old_name.
+                                window.imp().undo_stack.borrow_mut().push(
+                                    undo::UndoOp::Rename {
+                                        file: restored_file,
+                                        old_name,
+                                        new_name,
+                                    },
+                                );
                                 window.update_undo_actions();
                                 window.reload();
                             }
@@ -1810,6 +1839,9 @@ impl WrenWindow {
                             .await
                         {
                             Ok(()) => {
+                                window.imp().undo_stack.borrow_mut().push(
+                                    undo::UndoOp::NewFolder { dir },
+                                );
                                 window.update_undo_actions();
                                 window.reload();
                             }
@@ -1839,6 +1871,8 @@ impl WrenWindow {
         ] {
             self.action_set_enabled(action, has_selection);
         }
+        let has_clipboard = self.imp().clipboard_files.borrow().is_some();
+        self.action_set_enabled("win.paste", has_clipboard);
         self.update_status_bar();
     }
 
