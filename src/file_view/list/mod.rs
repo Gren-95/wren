@@ -157,6 +157,40 @@ impl WrenFileList {
         imp.list_view.add_controller(drag);
     }
 
+    pub fn setup_drop_target(&self) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let drop = gtk4::DropTarget::new(
+            gdk::FileList::static_type(),
+            gdk::DragAction::COPY | gdk::DragAction::MOVE,
+        );
+        drop.connect_drop(glib::clone!(
+            #[weak(rename_to = lv)]
+            imp.list_view,
+            #[upgrade_or]
+            false,
+            move |drop_target, value, _x, _y| {
+                let Ok(file_list) = value.get::<gdk::FileList>() else {
+                    return false;
+                };
+                let files = file_list.files();
+                if files.is_empty() {
+                    return false;
+                }
+                let action = drop_target
+                    .current_drop()
+                    .map(|d| d.actions())
+                    .unwrap_or(gdk::DragAction::COPY);
+                let is_move = !action.contains(gdk::DragAction::COPY)
+                    && action.contains(gdk::DragAction::MOVE);
+                if let Some(win) = lv.root().and_downcast::<crate::window::WrenWindow>() {
+                    win.drop_files(files, is_move);
+                }
+                true
+            }
+        ));
+        imp.list_view.add_controller(drop);
+    }
+
     pub fn setup_context_menu(&self, menu: &gio::MenuModel) {
         let imp = imp::WrenFileList::from_obj(self);
         let popover = gtk4::PopoverMenu::from_model(Some(menu));

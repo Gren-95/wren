@@ -88,6 +88,8 @@ impl WrenWindow {
         tab.file_list.setup_context_menu(&menu);
         tab.file_grid.setup_drag_source();
         tab.file_list.setup_drag_source();
+        tab.file_grid.setup_drop_target();
+        tab.file_list.setup_drop_target();
         tab.file_grid.setup_empty_area_click();
         tab.file_list.setup_empty_area_click();
         tab.file_grid.set_show_extensions(imp.show_extensions.get());
@@ -198,6 +200,26 @@ impl WrenWindow {
         self.update_nav_buttons();
         self.update_selection_actions();
         self.update_list_sort_headers();
+
+        // Close search and reset the new tab's filter
+        {
+            let imp = self.imp();
+            imp.search_bar.set_search_mode(false);
+            imp.search_entry.set_text("");
+        }
+        {
+            let imp = self.imp();
+            let show_hidden = imp.show_hidden.get();
+            let tabs = imp.tabs.borrow();
+            if let Some(tab) = tabs.get(idx) {
+                if let Some(model) = tab.dir_model.as_ref() {
+                    model.set_filter("", show_hidden);
+                    if tab.content_stack.visible_child_name().as_deref() == Some("no-results") {
+                        tab.content_stack.set_visible_child_name("files");
+                    }
+                }
+            }
+        }
     }
 
     // ── Navigation ───────────────────────────────────────────────────────────
@@ -1934,6 +1956,39 @@ impl WrenWindow {
                 }
             ));
         }
+    }
+
+    pub fn drop_files(&self, files: Vec<gio::File>, is_move: bool) {
+        let dest_dir = {
+            let Some(idx) = self.current_tab_index() else { return };
+            let tabs = self.imp().tabs.borrow();
+            match tabs.get(idx).and_then(|t| t.navigation.current().cloned()) {
+                Some(d) => d,
+                None => return,
+            }
+        };
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                for file in &files {
+                    let Some(name) = file.basename() else { continue };
+                    let dest = dest_dir.child(&name);
+                    if dest.equal(file) { continue; }
+                    if let Err(e) = copy_recursive(file.clone(), dest).await {
+                        window.show_toast(&format!("Could not copy: {e}"));
+                        return;
+                    }
+                    if is_move {
+                        if let Err(e) = delete_recursive(file.clone()).await {
+                            window.show_toast(&format!("Could not remove source: {e}"));
+                            return;
+                        }
+                    }
+                }
+                window.reload();
+            }
+        ));
     }
 
     pub fn new_window(&self) {

@@ -3,7 +3,6 @@ mod breadcrumb;
 mod file_view;
 mod model;
 mod navigation;
-mod operations;
 mod sidebar;
 mod window;
 
