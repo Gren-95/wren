@@ -1150,15 +1150,35 @@ impl WrenWindow {
 
                             let total = to_delete.len();
                             handle.set_total(total as u64, 0);
+                            // For trash entries, delete_future returns in ~ms,
+                            // so a 1000-item empty would whip the labels through
+                            // 1000 names in a second — visually unpleasant /
+                            // potentially photosensitive. Throttle the outer
+                            // loop's label changes to ~10 Hz; the progress bar
+                            // still ticks every iteration.
+                            let mut last_ui = std::time::Instant::now()
+                                .checked_sub(std::time::Duration::from_secs(1))
+                                .unwrap_or_else(std::time::Instant::now);
                             for (idx, f) in to_delete.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() { break; }
                                 log_op("empty trash", f, None);
-                                let name = f
-                                    .basename()
-                                    .map(|p| p.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                handle.set_item(&format!("{name} ({} of {total})", idx + 1));
-                                handle.set_paths(f, None);
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_ui)
+                                    >= std::time::Duration::from_millis(100)
+                                    || idx == 0
+                                    || idx + 1 == total
+                                {
+                                    last_ui = now;
+                                    let name = f
+                                        .basename()
+                                        .map(|p| p.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    handle.set_item(&format!(
+                                        "{name} ({} of {total})",
+                                        idx + 1
+                                    ));
+                                    handle.set_paths(f, None);
+                                }
                                 if let Err(e) = delete_recursive(
                                     f.clone(),
                                     &handle.cancellable,
@@ -1358,17 +1378,28 @@ impl WrenWindow {
                             }
                             handle.set_total(total_items, total_bytes);
 
+                            let mut last_ui = std::time::Instant::now()
+                                .checked_sub(std::time::Duration::from_secs(1))
+                                .unwrap_or_else(std::time::Instant::now);
                             for (idx, f) in to_delete.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
                                     break;
                                 }
                                 log_op("delete (trash unsupported)", f, None);
-                                let name = f
-                                    .basename()
-                                    .map(|p| p.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                handle.set_item(&format!("{name} ({} of {total})", idx + 1));
-                                handle.set_paths(f, None);
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_ui)
+                                    >= std::time::Duration::from_millis(100)
+                                    || idx == 0
+                                    || idx + 1 == total
+                                {
+                                    last_ui = now;
+                                    let name = f
+                                        .basename()
+                                        .map(|p| p.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                                    handle.set_paths(f, None);
+                                }
                                 if let Err(e) = delete_recursive(
                                     f.clone(),
                                     &handle.cancellable,
@@ -1443,17 +1474,28 @@ impl WrenWindow {
                             }
                             handle.set_total(total_items, total_bytes);
 
+                            let mut last_ui = std::time::Instant::now()
+                                .checked_sub(std::time::Duration::from_secs(1))
+                                .unwrap_or_else(std::time::Instant::now);
                             for (idx, file) in files.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
                                     break;
                                 }
                                 log_op("delete", file, None);
-                                let name = file
-                                    .basename()
-                                    .map(|p| p.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                handle.set_item(&format!("{name} ({} of {total})", idx + 1));
-                                handle.set_paths(file, None);
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_ui)
+                                    >= std::time::Duration::from_millis(100)
+                                    || idx == 0
+                                    || idx + 1 == total
+                                {
+                                    last_ui = now;
+                                    let name = file
+                                        .basename()
+                                        .map(|p| p.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                                    handle.set_paths(file, None);
+                                }
                                 if let Err(e) = delete_recursive(
                                     file.clone(),
                                     &handle.cancellable,
