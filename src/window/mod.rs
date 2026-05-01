@@ -1257,15 +1257,9 @@ impl WrenWindow {
             #[weak(rename_to = window)] self,
             #[strong] handle,
             async move {
-                let mut total_items: u64 = 0;
-                let mut total_bytes: u64 = 0;
-                for f in &files {
-                    if handle.cancellable.is_cancelled() { break; }
-                    let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
-                    // Restore is copy + delete, so totals double.
-                    total_items += n * 2;
-                    total_bytes += b * 2;
-                }
+                // Restore is copy + delete, so totals double.
+                let (total_items, total_bytes) =
+                    pre_walk_total(&files, true, &handle.cancellable).await;
                 handle.set_total(total_items, total_bytes);
 
                 let total = files.len();
@@ -1365,12 +1359,7 @@ impl WrenWindow {
         handle.set_item("Counting items…");
         // Pre-walk only for the count — trash_future doesn't expose progress
         // bytes, so we drive the bar by item count alone.
-        let mut total_items: u64 = 0;
-        for f in &files {
-            if handle.cancellable.is_cancelled() { break; }
-            let (n, _b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
-            total_items += n;
-        }
+        let (total_items, _) = pre_walk_total(&files, false, &handle.cancellable).await;
         handle.set_total(total_items, 0);
 
         let mut not_supported: Vec<gio::File> = Vec::new();
@@ -1464,16 +1453,8 @@ impl WrenWindow {
                         #[strong]
                         handle,
                         async move {
-                            let mut total_items: u64 = 0;
-                            let mut total_bytes: u64 = 0;
-                            for f in &to_delete {
-                                if handle.cancellable.is_cancelled() {
-                                    break;
-                                }
-                                let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
-                                total_items += n;
-                                total_bytes += b;
-                            }
+                            let (total_items, total_bytes) =
+                                pre_walk_total(&to_delete, false, &handle.cancellable).await;
                             handle.set_total(total_items, total_bytes);
 
                             let mut last_ui = std::time::Instant::now()
@@ -1565,16 +1546,8 @@ impl WrenWindow {
                         #[strong]
                         handle,
                         async move {
-                            let mut total_items: u64 = 0;
-                            let mut total_bytes: u64 = 0;
-                            for f in &files {
-                                if handle.cancellable.is_cancelled() {
-                                    break;
-                                }
-                                let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
-                                total_items += n;
-                                total_bytes += b;
-                            }
+                            let (total_items, total_bytes) =
+                                pre_walk_total(&files, false, &handle.cancellable).await;
                             handle.set_total(total_items, total_bytes);
 
                             let mut last_ui = std::time::Instant::now()
@@ -1695,24 +1668,10 @@ impl WrenWindow {
             #[strong]
             handle,
             async move {
-                // Pre-walk every top-level item to count sub-files and bytes.
-                // For move (cut+paste), every item is touched twice — once on
-                // copy, once on the post-move delete — so the totals double.
-                let mut total_items: u64 = 0;
-                let mut total_bytes: u64 = 0;
-                for file in &files {
-                    if handle.cancellable.is_cancelled() {
-                        break;
-                    }
-                    let (n, b) = count_items_and_bytes(file.clone(), &handle.cancellable).await;
-                    if is_cut {
-                        total_items += n * 2;
-                        total_bytes += b * 2;
-                    } else {
-                        total_items += n;
-                        total_bytes += b;
-                    }
-                }
+                // For move (cut+paste), every item is touched twice — copy
+                // then post-move delete — so the totals double.
+                let (total_items, total_bytes) =
+                    pre_walk_total(&files, is_cut, &handle.cancellable).await;
                 handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
@@ -2759,21 +2718,8 @@ impl WrenWindow {
             #[strong]
             handle,
             async move {
-                let mut total_items: u64 = 0;
-                let mut total_bytes: u64 = 0;
-                for file in &files {
-                    if handle.cancellable.is_cancelled() {
-                        break;
-                    }
-                    let (n, b) = count_items_and_bytes(file.clone(), &handle.cancellable).await;
-                    if is_move {
-                        total_items += n * 2;
-                        total_bytes += b * 2;
-                    } else {
-                        total_items += n;
-                        total_bytes += b;
-                    }
-                }
+                let (total_items, total_bytes) =
+                    pre_walk_total(&files, is_move, &handle.cancellable).await;
                 handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
@@ -3734,6 +3680,33 @@ async fn delete_recursive(
         dir.delete_future(glib::Priority::DEFAULT).await?;
     }
     Ok(())
+}
+
+/// Sum `count_items_and_bytes` over a slice of top-level entries. `double`
+/// is for ops that touch every item twice (move = copy + delete) so the bar
+/// can advance across both phases. Returns the totals at whatever point a
+/// cancellation was observed.
+async fn pre_walk_total(
+    files: &[gio::File],
+    double: bool,
+    cancellable: &gio::Cancellable,
+) -> (u64, u64) {
+    let mut total_items: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    for f in files {
+        if cancellable.is_cancelled() {
+            break;
+        }
+        let (n, b) = count_items_and_bytes(f.clone(), cancellable).await;
+        if double {
+            total_items += n * 2;
+            total_bytes += b * 2;
+        } else {
+            total_items += n;
+            total_bytes += b;
+        }
+    }
+    (total_items, total_bytes)
 }
 
 /// Pre-walk a file (or directory tree) and return `(item_count, total_bytes)`.
