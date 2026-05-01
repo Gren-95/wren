@@ -1144,6 +1144,15 @@ impl WrenWindow {
                         #[strong]
                         handle,
                         async move {
+                            let mut grand_total: u64 = 0;
+                            for f in &to_delete {
+                                if handle.cancellable.is_cancelled() {
+                                    break;
+                                }
+                                grand_total += count_items(f.clone(), &handle.cancellable).await;
+                            }
+                            let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+
                             for (idx, f) in to_delete.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
                                     break;
@@ -1154,17 +1163,22 @@ impl WrenWindow {
                                     .map(|p| p.to_string_lossy().into_owned())
                                     .unwrap_or_default();
                                 handle.set_item(&format!("{name} ({} of {total})", idx + 1));
-                                handle.set_fraction(idx as f64 / total as f64);
                                 handle.set_paths(f, None);
-                                if let Err(e) = delete_recursive(f.clone(), &handle.cancellable, handle.delete_callback()).await {
+                                if let Err(e) = delete_recursive(
+                                    f.clone(),
+                                    &handle.cancellable,
+                                    handle.delete_callback(cumulative.clone(), grand_total),
+                                )
+                                .await
+                                {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete (trash unsupported)", f, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
                                     break;
                                 }
-                                handle.set_fraction((idx + 1) as f64 / total as f64);
                             }
+                            handle.set_fraction(1.0);
                             window.op_finish(&handle);
                             window.reload();
                         }
@@ -1212,6 +1226,15 @@ impl WrenWindow {
                         #[strong]
                         handle,
                         async move {
+                            let mut grand_total: u64 = 0;
+                            for f in &files {
+                                if handle.cancellable.is_cancelled() {
+                                    break;
+                                }
+                                grand_total += count_items(f.clone(), &handle.cancellable).await;
+                            }
+                            let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+
                             for (idx, file) in files.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
                                     break;
@@ -1222,17 +1245,22 @@ impl WrenWindow {
                                     .map(|p| p.to_string_lossy().into_owned())
                                     .unwrap_or_default();
                                 handle.set_item(&format!("{name} ({} of {total})", idx + 1));
-                                handle.set_fraction(idx as f64 / total as f64);
                                 handle.set_paths(file, None);
-                                if let Err(e) = delete_recursive(file.clone(), &handle.cancellable, handle.delete_callback()).await {
+                                if let Err(e) = delete_recursive(
+                                    file.clone(),
+                                    &handle.cancellable,
+                                    handle.delete_callback(cumulative.clone(), grand_total),
+                                )
+                                .await
+                                {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete", file, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
                                     break;
                                 }
-                                handle.set_fraction((idx + 1) as f64 / total as f64);
                             }
+                            handle.set_fraction(1.0);
                             window.op_finish(&handle);
                             window.reload();
                         }
@@ -1309,6 +1337,20 @@ impl WrenWindow {
             #[strong]
             handle,
             async move {
+                // Pre-walk every top-level item to count sub-files. Sum gives
+                // the denominator for the progress bar so it advances per
+                // sub-file across the whole batch (move adds the post-move
+                // delete walk on top, doubling the count for that case).
+                let mut grand_total: u64 = 0;
+                for file in &files {
+                    if handle.cancellable.is_cancelled() {
+                        break;
+                    }
+                    let n = count_items(file.clone(), &handle.cancellable).await;
+                    grand_total += if is_cut { n * 2 } else { n };
+                }
+                let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+
                 let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
                     if handle.cancellable.is_cancelled() {
@@ -1324,7 +1366,6 @@ impl WrenWindow {
                     let action = if is_cut { "move" } else { "copy" };
                     let display_name = name.to_string_lossy();
                     handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
-                    handle.set_fraction(idx as f64 / total as f64);
                     handle.set_paths(file, Some(&dest_dir.child(&name)));
 
                     let dest_initial = dest_dir.child(&name);
@@ -1348,7 +1389,30 @@ impl WrenWindow {
                         ConflictResolution::Skip => continue,
                         ConflictResolution::Cancel => break,
                         ConflictResolution::Replace => {
-                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable, handle.delete_callback()).await {
+                            // Replace's pre-delete: show path activity but
+                            // don't tick the main counter (these items aren't
+                            // in the pre-walked total).
+                            let h = handle.clone();
+                            let last = std::rc::Rc::new(std::cell::Cell::new(
+                                std::time::Instant::now(),
+                            ));
+                            let pre_delete_cb = move |s: &gio::File| {
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last.get())
+                                    < std::time::Duration::from_millis(40)
+                                {
+                                    return;
+                                }
+                                last.set(now);
+                                h.set_paths(s, None);
+                            };
+                            if let Err(e) = delete_recursive(
+                                dest_initial.clone(),
+                                &handle.cancellable,
+                                pre_delete_cb,
+                            )
+                            .await
+                            {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
@@ -1361,7 +1425,14 @@ impl WrenWindow {
                     };
                     log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable, handle.copy_callback()).await {
+                    if let Err(e) = copy_recursive(
+                        file.clone(),
+                        dest.clone(),
+                        &handle.cancellable,
+                        handle.copy_callback(cumulative.clone(), grand_total),
+                    )
+                    .await
+                    {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not paste: {e}"));
@@ -1370,7 +1441,13 @@ impl WrenWindow {
                     }
                     if is_cut {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable, handle.delete_callback()).await {
+                        if let Err(e) = delete_recursive(
+                            file.clone(),
+                            &handle.cancellable,
+                            handle.delete_callback(cumulative.clone(), grand_total),
+                        )
+                        .await
+                        {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not move: {e}"));
@@ -1378,8 +1455,8 @@ impl WrenWindow {
                             break;
                         }
                     }
-                    handle.set_fraction((idx + 1) as f64 / total as f64);
                 }
+                handle.set_fraction(1.0);
                 if is_cut {
                     window.imp().clipboard_files.replace(None);
                     window.update_cut_indicator(&[]);
@@ -2215,7 +2292,16 @@ impl WrenWindow {
                 handle,
                 async move {
                     log_op("duplicate", &file, Some(&dest_file));
-                    match copy_recursive(file.clone(), dest_file.clone(), &handle.cancellable, handle.copy_callback()).await {
+                    let total = count_items(file.clone(), &handle.cancellable).await;
+                    let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                    match copy_recursive(
+                        file.clone(),
+                        dest_file.clone(),
+                        &handle.cancellable,
+                        handle.copy_callback(cumulative, total),
+                    )
+                    .await
+                    {
                         Ok(()) => {
                             handle.set_fraction(1.0);
                             window.op_finish(&handle);
@@ -2254,6 +2340,16 @@ impl WrenWindow {
             #[strong]
             handle,
             async move {
+                let mut grand_total: u64 = 0;
+                for file in &files {
+                    if handle.cancellable.is_cancelled() {
+                        break;
+                    }
+                    let n = count_items(file.clone(), &handle.cancellable).await;
+                    grand_total += if is_move { n * 2 } else { n };
+                }
+                let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+
                 let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
                     if handle.cancellable.is_cancelled() {
@@ -2265,7 +2361,6 @@ impl WrenWindow {
                     let action = if is_move { "drop-move" } else { "drop-copy" };
                     let display_name = name.to_string_lossy();
                     handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
-                    handle.set_fraction(idx as f64 / total as f64);
                     handle.set_paths(file, Some(&dest_dir.child(&name)));
 
                     let dest_initial = dest_dir.child(&name);
@@ -2289,7 +2384,30 @@ impl WrenWindow {
                         ConflictResolution::Skip => continue,
                         ConflictResolution::Cancel => break,
                         ConflictResolution::Replace => {
-                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable, handle.delete_callback()).await {
+                            // Replace's pre-delete: show path activity but
+                            // don't tick the main counter (these items aren't
+                            // in the pre-walked total).
+                            let h = handle.clone();
+                            let last = std::rc::Rc::new(std::cell::Cell::new(
+                                std::time::Instant::now(),
+                            ));
+                            let pre_delete_cb = move |s: &gio::File| {
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last.get())
+                                    < std::time::Duration::from_millis(40)
+                                {
+                                    return;
+                                }
+                                last.set(now);
+                                h.set_paths(s, None);
+                            };
+                            if let Err(e) = delete_recursive(
+                                dest_initial.clone(),
+                                &handle.cancellable,
+                                pre_delete_cb,
+                            )
+                            .await
+                            {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
@@ -2302,7 +2420,14 @@ impl WrenWindow {
                     };
                     log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable, handle.copy_callback()).await {
+                    if let Err(e) = copy_recursive(
+                        file.clone(),
+                        dest.clone(),
+                        &handle.cancellable,
+                        handle.copy_callback(cumulative.clone(), grand_total),
+                    )
+                    .await
+                    {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not copy: {e}"));
@@ -2311,7 +2436,13 @@ impl WrenWindow {
                     }
                     if is_move {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable, handle.delete_callback()).await {
+                        if let Err(e) = delete_recursive(
+                            file.clone(),
+                            &handle.cancellable,
+                            handle.delete_callback(cumulative.clone(), grand_total),
+                        )
+                        .await
+                        {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not remove source: {e}"));
@@ -2319,8 +2450,8 @@ impl WrenWindow {
                             break;
                         }
                     }
-                    handle.set_fraction((idx + 1) as f64 / total as f64);
                 }
+                handle.set_fraction(1.0);
                 window.op_finish(&handle);
                 window.reload();
             }
@@ -2656,33 +2787,50 @@ impl OpHandle {
         self.progress.set_text(Some(&format!("{}%", (f * 100.0).round() as u32)));
     }
 
-    /// Build a per-sub-item progress callback for `copy_recursive`. Updates
-    /// the expanded path labels for every file inside a recursive copy,
-    /// throttled to ~25 updates/sec so a 10k-file folder doesn't melt GTK.
-    pub fn copy_callback(&self) -> impl Fn(&gio::File, &gio::File) + 'static {
+    /// Build a per-sub-item callback for `copy_recursive`. The callback
+    /// increments `cumulative` for every file/dir touched (always — never
+    /// throttled, so the bar reaches 100%), and updates the expander labels
+    /// + progress bar fraction at most ~25 times/sec.
+    pub fn copy_callback(
+        &self,
+        cumulative: std::rc::Rc<std::cell::Cell<u64>>,
+        total: u64,
+    ) -> impl Fn(&gio::File, &gio::File) + 'static {
         let h = self.clone();
         let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
         move |s, d| {
+            cumulative.set(cumulative.get() + 1);
             let now = std::time::Instant::now();
             if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
                 return;
             }
             last.set(now);
             h.set_paths(s, Some(d));
+            if total > 0 {
+                h.set_fraction(cumulative.get() as f64 / total as f64);
+            }
         }
     }
 
-    /// Build a per-sub-item progress callback for `delete_recursive`.
-    pub fn delete_callback(&self) -> impl Fn(&gio::File) + 'static {
+    /// Build a per-sub-item callback for `delete_recursive`.
+    pub fn delete_callback(
+        &self,
+        cumulative: std::rc::Rc<std::cell::Cell<u64>>,
+        total: u64,
+    ) -> impl Fn(&gio::File) + 'static {
         let h = self.clone();
         let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
         move |s| {
+            cumulative.set(cumulative.get() + 1);
             let now = std::time::Instant::now();
             if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
                 return;
             }
             last.set(now);
             h.set_paths(s, None);
+            if total > 0 {
+                h.set_fraction(cumulative.get() as f64 / total as f64);
+            }
         }
     }
 }
@@ -2843,6 +2991,70 @@ async fn delete_recursive(
         dir.delete_future(glib::Priority::DEFAULT).await?;
     }
     Ok(())
+}
+
+/// Pre-walk a file (or directory tree) and return the total number of items
+/// that `copy_recursive` / `delete_recursive` would touch. Used by callers to
+/// drive the progress bar fraction. Honours the cancellable. Errors inside
+/// the walk (e.g. permission denied on a subdir) are silently skipped, which
+/// will under-count slightly — that's fine, the bar might end at e.g. 99%
+/// rather than overshooting.
+async fn count_items(file: gio::File, cancellable: &gio::Cancellable) -> u64 {
+    let info = match file
+        .query_info_future(
+            "standard::type",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            glib::Priority::DEFAULT,
+        )
+        .await
+    {
+        Ok(i) => i,
+        Err(_) => return 0,
+    };
+    if info.file_type() != gio::FileType::Directory {
+        return 1;
+    }
+    // Count the directory itself, plus every descendant.
+    let mut count: u64 = 1;
+    let mut stack = vec![file];
+    while let Some(dir) = stack.pop() {
+        if cancellable.is_cancelled() {
+            return count;
+        }
+        let enumerator = match dir
+            .enumerate_children_future(
+                "standard::name,standard::type",
+                gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                glib::Priority::DEFAULT,
+            )
+            .await
+        {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        loop {
+            if cancellable.is_cancelled() {
+                return count;
+            }
+            let batch = match enumerator
+                .next_files_future(50, glib::Priority::DEFAULT)
+                .await
+            {
+                Ok(b) => b,
+                Err(_) => break,
+            };
+            if batch.is_empty() {
+                break;
+            }
+            for info in batch {
+                count += 1;
+                if info.file_type() == gio::FileType::Directory {
+                    stack.push(dir.child(info.name()));
+                }
+            }
+        }
+    }
+    count
 }
 
 /// Recursively walk a directory, accumulating total bytes and item count.
