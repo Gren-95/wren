@@ -2729,7 +2729,20 @@ struct OpState {
     total_items: u64,
     total_bytes: u64,
     start: std::time::Instant,
+    /// Last time the stats line (speed / ETA / bytes) was redrawn. Updated
+    /// at most once per `STATS_REFRESH` so the values don't jitter.
+    last_stats_emit: std::time::Instant,
+    /// Last byte rate that was actually written to the label, for jitter
+    /// smoothing on the next emit.
+    last_byte_rate: f64,
+    /// Last ETA written to the label, in seconds, for jitter smoothing.
+    last_eta_secs: u64,
 }
+
+const STATS_REFRESH: std::time::Duration = std::time::Duration::from_millis(1000);
+/// Wait for at least this much activity before computing speed / ETA — earlier
+/// numbers are dominated by ramp-up jitter and the first-file outlier.
+const STATS_WARMUP: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// A handle to one in-flight file operation. Holds its Cancellable and the
 /// widgets that display its progress in the header-bar popover. Cloning is
@@ -2813,12 +2826,16 @@ impl OpHandle {
         row.append(&src_row);
         row.append(&dest_row);
 
+        let now = std::time::Instant::now();
         let state = std::rc::Rc::new(std::cell::RefCell::new(OpState {
             items_done: 0,
             bytes_done: 0,
             total_items: 0,
             total_bytes: 0,
-            start: std::time::Instant::now(),
+            start: now,
+            last_stats_emit: now,
+            last_byte_rate: 0.0,
+            last_eta_secs: 0,
         }));
 
         Self {
@@ -2937,17 +2954,64 @@ impl OpHandle {
             std::time::Instant,
         ),
     ) {
-        // Fraction prefers bytes when known; falls back to items.
+        // Fraction prefers bytes when known; falls back to items. This is
+        // cheap and runs at the callback's 40 ms tick rate.
         if total_bytes > 0 {
             self.set_fraction(bytes as f64 / total_bytes as f64);
         } else if total_items > 0 {
             self.set_fraction(items as f64 / total_items as f64);
         }
 
-        let elapsed = start.elapsed().as_secs_f64();
-        let byte_rate = if elapsed > 0.5 { bytes as f64 / elapsed } else { 0.0 };
-        let item_rate = if elapsed > 0.5 { items as f64 / elapsed } else { 0.0 };
+        // Stats text (speed, ETA, bytes) is much more visually disruptive
+        // when it bounces — gate it behind a 1 s refresh window plus a warmup
+        // before any rate is computed at all.
+        let elapsed = start.elapsed();
+        if elapsed < STATS_WARMUP {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let (smoothed_byte_rate, smoothed_eta) = {
+            let mut state = self.state.borrow_mut();
+            if now.duration_since(state.last_stats_emit) < STATS_REFRESH {
+                return;
+            }
+            state.last_stats_emit = now;
 
+            let elapsed_s = elapsed.as_secs_f64();
+            let raw_byte_rate = bytes as f64 / elapsed_s;
+            // EMA: 70% of the previous emit, 30% of the new sample. Stops
+            // the rate from snapping to zero on a stretch of small files
+            // and back to peak on a big one.
+            let smoothed_rate = if state.last_byte_rate == 0.0 {
+                raw_byte_rate
+            } else {
+                0.7 * state.last_byte_rate + 0.3 * raw_byte_rate
+            };
+            state.last_byte_rate = smoothed_rate;
+
+            let raw_eta = if total_bytes > 0 && smoothed_rate > 0.0 {
+                let remaining = total_bytes.saturating_sub(bytes);
+                (remaining as f64 / smoothed_rate) as u64
+            } else if total_items > 0 && items > 0 {
+                let remaining = total_items.saturating_sub(items);
+                let item_rate = items as f64 / elapsed_s;
+                if item_rate > 0.0 {
+                    (remaining as f64 / item_rate) as u64
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            // Round ETA to a sensible granularity so it doesn't tick every
+            // second visibly; keeps "12 s left" stable for the second it's
+            // displayed instead of jumping 12 → 11 → 9 → 11 every refresh.
+            let smoothed_eta = round_eta(raw_eta);
+            state.last_eta_secs = smoothed_eta;
+            (smoothed_rate, smoothed_eta)
+        };
+
+        let item_rate = items as f64 / elapsed.as_secs_f64();
         let mut parts: Vec<String> = Vec::new();
         if total_bytes > 0 {
             parts.push(format!(
@@ -2956,26 +3020,31 @@ impl OpHandle {
                 format_file_size(total_bytes)
             ));
         }
-        if byte_rate >= 1024.0 {
-            parts.push(format!("{}/s", format_file_size(byte_rate as u64)));
+        if smoothed_byte_rate >= 1024.0 {
+            parts.push(format!("{}/s", format_file_size(smoothed_byte_rate as u64)));
         } else if item_rate > 0.0 {
             parts.push(format!("{:.0} items/s", item_rate));
         }
-        // ETA: prefer bytes-based when total_bytes > 0 and rate > 0.
-        let eta_secs = if total_bytes > 0 && byte_rate > 0.0 {
-            let remaining = total_bytes.saturating_sub(bytes);
-            (remaining as f64 / byte_rate) as u64
-        } else if total_items > 0 && item_rate > 0.0 {
-            let remaining = total_items.saturating_sub(items);
-            (remaining as f64 / item_rate) as u64
-        } else {
-            0
-        };
-        if eta_secs > 0 {
-            parts.push(format!("{} left", format_duration(eta_secs)));
+        if smoothed_eta > 0 {
+            parts.push(format!("{} left", format_duration(smoothed_eta)));
         }
         self.stats_label.set_text(&parts.join(" · "));
     }
+}
+
+/// Round an ETA in seconds to a granularity that doesn't visibly shift on
+/// every refresh:
+///   < 10 s  → 1 s steps
+///   < 1 min → 5 s steps
+///   < 10 min → 30 s steps
+///   < 1 h   → 1 min steps
+///   ≥ 1 h   → 5 min steps
+fn round_eta(secs: u64) -> u64 {
+    if secs < 10 { secs }
+    else if secs < 60 { (secs + 2) / 5 * 5 }
+    else if secs < 600 { (secs + 15) / 30 * 30 }
+    else if secs < 3600 { (secs + 30) / 60 * 60 }
+    else { (secs + 150) / 300 * 300 }
 }
 
 async fn copy_recursive(
