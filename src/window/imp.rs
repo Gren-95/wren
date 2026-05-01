@@ -540,10 +540,11 @@ impl ObjectImpl for WrenWindow {
         // at a glance that something is in progress.
         {
             let imp = obj.imp();
-            imp.op_popover_box.set_margin_top(6);
-            imp.op_popover_box.set_margin_bottom(6);
-            imp.op_popover_box.set_margin_start(6);
-            imp.op_popover_box.set_margin_end(6);
+            imp.op_popover_box.set_spacing(10);
+            imp.op_popover_box.set_margin_top(8);
+            imp.op_popover_box.set_margin_bottom(8);
+            imp.op_popover_box.set_margin_start(8);
+            imp.op_popover_box.set_margin_end(8);
             let popover = gtk4::Popover::new();
             popover.set_child(Some(&imp.op_popover_box));
             imp.op_button.set_popover(Some(&popover));

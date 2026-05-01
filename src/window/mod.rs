@@ -2767,10 +2767,10 @@ impl OpHandle {
         let cancellable = gio::Cancellable::new();
         let row = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
         row.set_width_request(380);
-        row.set_margin_top(6);
-        row.set_margin_bottom(6);
-        row.set_margin_start(4);
-        row.set_margin_end(4);
+        // libadwaita "card" gives a subtle rounded background + border so
+        // each op row reads as its own visual unit when several stack up.
+        row.add_css_class("card");
+        row.add_css_class("wren-op-row");
 
         // ── Header: bold title + flat circular Cancel button ────────────────
         let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);

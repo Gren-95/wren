@@ -145,7 +145,9 @@ button.wren-breadcrumb:drop(active) {
 }
 
 /* ── File-operation popover rows ──────────────────────────────────────────
-   Separator between stacked operation rows; subtle, matches dim-label. */
-popover.menu > arrow.top,
-popover.menu > arrow.bottom { /* no-op selector to keep grouping above */ }
+   Each op is rendered as a libadwaita .card. Padding here so the card
+   contents (header + bar + paths) breathe inside the rounded background. */
+.wren-op-row {
+  padding: 12px;
+}
 
