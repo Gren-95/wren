@@ -1144,14 +1144,17 @@ impl WrenWindow {
                         #[strong]
                         handle,
                         async move {
-                            let mut grand_total: u64 = 0;
+                            let mut total_items: u64 = 0;
+                            let mut total_bytes: u64 = 0;
                             for f in &to_delete {
                                 if handle.cancellable.is_cancelled() {
                                     break;
                                 }
-                                grand_total += count_items(f.clone(), &handle.cancellable).await;
+                                let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
+                                total_items += n;
+                                total_bytes += b;
                             }
-                            let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                            handle.set_total(total_items, total_bytes);
 
                             for (idx, f) in to_delete.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
@@ -1167,7 +1170,7 @@ impl WrenWindow {
                                 if let Err(e) = delete_recursive(
                                     f.clone(),
                                     &handle.cancellable,
-                                    handle.delete_callback(cumulative.clone(), grand_total),
+                                    handle.delete_callback(),
                                 )
                                 .await
                                 {
@@ -1226,14 +1229,17 @@ impl WrenWindow {
                         #[strong]
                         handle,
                         async move {
-                            let mut grand_total: u64 = 0;
+                            let mut total_items: u64 = 0;
+                            let mut total_bytes: u64 = 0;
                             for f in &files {
                                 if handle.cancellable.is_cancelled() {
                                     break;
                                 }
-                                grand_total += count_items(f.clone(), &handle.cancellable).await;
+                                let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
+                                total_items += n;
+                                total_bytes += b;
                             }
-                            let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                            handle.set_total(total_items, total_bytes);
 
                             for (idx, file) in files.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
@@ -1249,7 +1255,7 @@ impl WrenWindow {
                                 if let Err(e) = delete_recursive(
                                     file.clone(),
                                     &handle.cancellable,
-                                    handle.delete_callback(cumulative.clone(), grand_total),
+                                    handle.delete_callback(),
                                 )
                                 .await
                                 {
@@ -1337,19 +1343,25 @@ impl WrenWindow {
             #[strong]
             handle,
             async move {
-                // Pre-walk every top-level item to count sub-files. Sum gives
-                // the denominator for the progress bar so it advances per
-                // sub-file across the whole batch (move adds the post-move
-                // delete walk on top, doubling the count for that case).
-                let mut grand_total: u64 = 0;
+                // Pre-walk every top-level item to count sub-files and bytes.
+                // For move (cut+paste), every item is touched twice — once on
+                // copy, once on the post-move delete — so the totals double.
+                let mut total_items: u64 = 0;
+                let mut total_bytes: u64 = 0;
                 for file in &files {
                     if handle.cancellable.is_cancelled() {
                         break;
                     }
-                    let n = count_items(file.clone(), &handle.cancellable).await;
-                    grand_total += if is_cut { n * 2 } else { n };
+                    let (n, b) = count_items_and_bytes(file.clone(), &handle.cancellable).await;
+                    if is_cut {
+                        total_items += n * 2;
+                        total_bytes += b * 2;
+                    } else {
+                        total_items += n;
+                        total_bytes += b;
+                    }
                 }
-                let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
@@ -1396,7 +1408,7 @@ impl WrenWindow {
                             let last = std::rc::Rc::new(std::cell::Cell::new(
                                 std::time::Instant::now(),
                             ));
-                            let pre_delete_cb = move |s: &gio::File| {
+                            let pre_delete_cb = move |s: &gio::File, _size: u64| {
                                 let now = std::time::Instant::now();
                                 if now.duration_since(last.get())
                                     < std::time::Duration::from_millis(40)
@@ -1429,7 +1441,7 @@ impl WrenWindow {
                         file.clone(),
                         dest.clone(),
                         &handle.cancellable,
-                        handle.copy_callback(cumulative.clone(), grand_total),
+                        handle.copy_callback(),
                     )
                     .await
                     {
@@ -1444,7 +1456,7 @@ impl WrenWindow {
                         if let Err(e) = delete_recursive(
                             file.clone(),
                             &handle.cancellable,
-                            handle.delete_callback(cumulative.clone(), grand_total),
+                            handle.delete_callback(),
                         )
                         .await
                         {
@@ -2292,13 +2304,13 @@ impl WrenWindow {
                 handle,
                 async move {
                     log_op("duplicate", &file, Some(&dest_file));
-                    let total = count_items(file.clone(), &handle.cancellable).await;
-                    let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                    let (total_items, total_bytes) = count_items_and_bytes(file.clone(), &handle.cancellable).await;
+                    handle.set_total(total_items, total_bytes);
                     match copy_recursive(
                         file.clone(),
                         dest_file.clone(),
                         &handle.cancellable,
-                        handle.copy_callback(cumulative, total),
+                        handle.copy_callback(),
                     )
                     .await
                     {
@@ -2340,15 +2352,22 @@ impl WrenWindow {
             #[strong]
             handle,
             async move {
-                let mut grand_total: u64 = 0;
+                let mut total_items: u64 = 0;
+                let mut total_bytes: u64 = 0;
                 for file in &files {
                     if handle.cancellable.is_cancelled() {
                         break;
                     }
-                    let n = count_items(file.clone(), &handle.cancellable).await;
-                    grand_total += if is_move { n * 2 } else { n };
+                    let (n, b) = count_items_and_bytes(file.clone(), &handle.cancellable).await;
+                    if is_move {
+                        total_items += n * 2;
+                        total_bytes += b * 2;
+                    } else {
+                        total_items += n;
+                        total_bytes += b;
+                    }
                 }
-                let cumulative = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
@@ -2391,7 +2410,7 @@ impl WrenWindow {
                             let last = std::rc::Rc::new(std::cell::Cell::new(
                                 std::time::Instant::now(),
                             ));
-                            let pre_delete_cb = move |s: &gio::File| {
+                            let pre_delete_cb = move |s: &gio::File, _size: u64| {
                                 let now = std::time::Instant::now();
                                 if now.duration_since(last.get())
                                     < std::time::Duration::from_millis(40)
@@ -2424,7 +2443,7 @@ impl WrenWindow {
                         file.clone(),
                         dest.clone(),
                         &handle.cancellable,
-                        handle.copy_callback(cumulative.clone(), grand_total),
+                        handle.copy_callback(),
                     )
                     .await
                     {
@@ -2439,7 +2458,7 @@ impl WrenWindow {
                         if let Err(e) = delete_recursive(
                             file.clone(),
                             &handle.cancellable,
-                            handle.delete_callback(cumulative.clone(), grand_total),
+                            handle.delete_callback(),
                         )
                         .await
                         {
@@ -2701,6 +2720,17 @@ pub enum ConflictResolution {
     Cancel,
 }
 
+/// Mutable progress accounting for one in-flight op. Lives behind an
+/// `Rc<RefCell<…>>` inside an OpHandle so multiple callbacks can update it.
+#[derive(Debug)]
+struct OpState {
+    items_done: u64,
+    bytes_done: u64,
+    total_items: u64,
+    total_bytes: u64,
+    start: std::time::Instant,
+}
+
 /// A handle to one in-flight file operation. Holds its Cancellable and the
 /// widgets that display its progress in the header-bar popover. Cloning is
 /// cheap — every field is a reference-counted GObject (or a Cancellable, which
@@ -2711,10 +2741,12 @@ pub struct OpHandle {
     pub row: gtk4::Box,
     item_label: gtk4::Label,
     progress: gtk4::ProgressBar,
+    stats_label: gtk4::Label,
     src_row: gtk4::Box,
     src_label: gtk4::Label,
     dest_row: gtk4::Box,
     dest_label: gtk4::Label,
+    state: std::rc::Rc<std::cell::RefCell<OpState>>,
 }
 
 impl OpHandle {
@@ -2756,6 +2788,16 @@ impl OpHandle {
         progress.set_show_text(true);
         progress.set_text(Some("0%"));
 
+        // ── Stats line: "1.2 GB / 5.3 GB · 23 MB/s · 12 s left" ─────────────
+        let stats_label = gtk4::Label::new(None);
+        stats_label.set_xalign(0.0);
+        stats_label.set_hexpand(true);
+        stats_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        stats_label.set_width_chars(40);
+        stats_label.set_max_width_chars(40);
+        stats_label.add_css_class("caption");
+        stats_label.add_css_class("dim-label");
+
         // ── Path rows: From / To, always visible (no expander) ──────────────
         let (src_row, src_label) = make_path_row("From");
         let (dest_row, dest_label) = make_path_row("To");
@@ -2767,19 +2809,37 @@ impl OpHandle {
         row.append(&header);
         row.append(&item_label);
         row.append(&progress);
+        row.append(&stats_label);
         row.append(&src_row);
         row.append(&dest_row);
+
+        let state = std::rc::Rc::new(std::cell::RefCell::new(OpState {
+            items_done: 0,
+            bytes_done: 0,
+            total_items: 0,
+            total_bytes: 0,
+            start: std::time::Instant::now(),
+        }));
 
         Self {
             cancellable,
             row,
             item_label,
             progress,
+            stats_label,
             src_row,
             src_label,
             dest_row,
             dest_label,
+            state,
         }
+    }
+
+    /// Set the totals (called by the caller once pre-walk is done).
+    pub fn set_total(&self, items: u64, bytes: u64) {
+        let mut s = self.state.borrow_mut();
+        s.total_items = items;
+        s.total_bytes = bytes;
     }
 
     /// Set the current item line (filename + counter, e.g. "foo.txt (3 of 17)").
@@ -2812,50 +2872,109 @@ impl OpHandle {
     }
 
     /// Build a per-sub-item callback for `copy_recursive`. The callback
-    /// increments `cumulative` for every file/dir touched (always — never
-    /// throttled, so the bar reaches 100%), and updates the expander labels
-    /// + progress bar fraction at most ~25 times/sec.
-    pub fn copy_callback(
-        &self,
-        cumulative: std::rc::Rc<std::cell::Cell<u64>>,
-        total: u64,
-    ) -> impl Fn(&gio::File, &gio::File) + 'static {
+    /// always increments items_done and bytes_done in the shared OpState,
+    /// then at most ~25 times/sec recomputes rate / ETA and updates labels.
+    pub fn copy_callback(&self) -> impl Fn(&gio::File, &gio::File, u64) + 'static {
         let h = self.clone();
         let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
-        move |s, d| {
-            cumulative.set(cumulative.get() + 1);
+        move |s, d, size| {
+            let snapshot = {
+                let mut state = h.state.borrow_mut();
+                state.items_done += 1;
+                state.bytes_done += size;
+                (
+                    state.items_done,
+                    state.bytes_done,
+                    state.total_items,
+                    state.total_bytes,
+                    state.start,
+                )
+            };
             let now = std::time::Instant::now();
             if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
                 return;
             }
             last.set(now);
             h.set_paths(s, Some(d));
-            if total > 0 {
-                h.set_fraction(cumulative.get() as f64 / total as f64);
-            }
+            h.update_progress_display(snapshot);
         }
     }
 
     /// Build a per-sub-item callback for `delete_recursive`.
-    pub fn delete_callback(
-        &self,
-        cumulative: std::rc::Rc<std::cell::Cell<u64>>,
-        total: u64,
-    ) -> impl Fn(&gio::File) + 'static {
+    pub fn delete_callback(&self) -> impl Fn(&gio::File, u64) + 'static {
         let h = self.clone();
         let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
-        move |s| {
-            cumulative.set(cumulative.get() + 1);
+        move |s, size| {
+            let snapshot = {
+                let mut state = h.state.borrow_mut();
+                state.items_done += 1;
+                state.bytes_done += size;
+                (
+                    state.items_done,
+                    state.bytes_done,
+                    state.total_items,
+                    state.total_bytes,
+                    state.start,
+                )
+            };
             let now = std::time::Instant::now();
             if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
                 return;
             }
             last.set(now);
             h.set_paths(s, None);
-            if total > 0 {
-                h.set_fraction(cumulative.get() as f64 / total as f64);
-            }
+            h.update_progress_display(snapshot);
         }
+    }
+
+    fn update_progress_display(
+        &self,
+        (items, bytes, total_items, total_bytes, start): (
+            u64,
+            u64,
+            u64,
+            u64,
+            std::time::Instant,
+        ),
+    ) {
+        // Fraction prefers bytes when known; falls back to items.
+        if total_bytes > 0 {
+            self.set_fraction(bytes as f64 / total_bytes as f64);
+        } else if total_items > 0 {
+            self.set_fraction(items as f64 / total_items as f64);
+        }
+
+        let elapsed = start.elapsed().as_secs_f64();
+        let byte_rate = if elapsed > 0.5 { bytes as f64 / elapsed } else { 0.0 };
+        let item_rate = if elapsed > 0.5 { items as f64 / elapsed } else { 0.0 };
+
+        let mut parts: Vec<String> = Vec::new();
+        if total_bytes > 0 {
+            parts.push(format!(
+                "{} of {}",
+                format_file_size(bytes),
+                format_file_size(total_bytes)
+            ));
+        }
+        if byte_rate >= 1024.0 {
+            parts.push(format!("{}/s", format_file_size(byte_rate as u64)));
+        } else if item_rate > 0.0 {
+            parts.push(format!("{:.0} items/s", item_rate));
+        }
+        // ETA: prefer bytes-based when total_bytes > 0 and rate > 0.
+        let eta_secs = if total_bytes > 0 && byte_rate > 0.0 {
+            let remaining = total_bytes.saturating_sub(bytes);
+            (remaining as f64 / byte_rate) as u64
+        } else if total_items > 0 && item_rate > 0.0 {
+            let remaining = total_items.saturating_sub(items);
+            (remaining as f64 / item_rate) as u64
+        } else {
+            0
+        };
+        if eta_secs > 0 {
+            parts.push(format!("{} left", format_duration(eta_secs)));
+        }
+        self.stats_label.set_text(&parts.join(" · "));
     }
 }
 
@@ -2863,7 +2982,7 @@ async fn copy_recursive(
     src: gio::File,
     dest: gio::File,
     cancellable: &gio::Cancellable,
-    on_item: impl Fn(&gio::File, &gio::File) + 'static,
+    on_item: impl Fn(&gio::File, &gio::File, u64) + 'static,
 ) -> Result<(), glib::Error> {
     if cancellable.is_cancelled() {
         return Err(cancelled_err());
@@ -2872,14 +2991,15 @@ async fn copy_recursive(
     // Check whether the top-level source is a directory.
     let src_info = src
         .query_info_future(
-            "standard::type",
+            "standard::type,standard::size",
             gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
             glib::Priority::DEFAULT,
         )
         .await?;
 
+    let src_size = src_info.size().max(0) as u64;
     if src_info.file_type() != gio::FileType::Directory {
-        on_item(&src, &dest);
+        on_item(&src, &dest, src_size);
         let (fut, _) = src.copy_future(
             &dest,
             gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
@@ -2888,7 +3008,8 @@ async fn copy_recursive(
         return fut.await;
     }
 
-    on_item(&src, &dest);
+    // Top-level directory: tick once with size 0 (dirs don't contribute bytes).
+    on_item(&src, &dest, 0);
     // BFS queue of (src_dir, dest_dir) pairs.
     dest.make_directory_future(glib::Priority::DEFAULT).await?;
     let mut queue = std::collections::VecDeque::new();
@@ -2900,7 +3021,7 @@ async fn copy_recursive(
         }
         let enumerator = src_dir
             .enumerate_children_future(
-                "standard::name,standard::type",
+                "standard::name,standard::type,standard::size",
                 gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
                 glib::Priority::DEFAULT,
             )
@@ -2923,8 +3044,10 @@ async fn copy_recursive(
                 let name = child_info.name();
                 let child_src = src_dir.child(&name);
                 let child_dest = dest_dir.child(&name);
-                on_item(&child_src, &child_dest);
-                if child_info.file_type() == gio::FileType::Directory {
+                let is_dir = child_info.file_type() == gio::FileType::Directory;
+                let size = if is_dir { 0 } else { child_info.size().max(0) as u64 };
+                on_item(&child_src, &child_dest, size);
+                if is_dir {
                     child_dest.make_directory_future(glib::Priority::DEFAULT).await?;
                     queue.push_back((child_src, child_dest));
                 } else {
@@ -2944,21 +3067,21 @@ async fn copy_recursive(
 async fn delete_recursive(
     file: gio::File,
     cancellable: &gio::Cancellable,
-    on_item: impl Fn(&gio::File) + 'static,
+    on_item: impl Fn(&gio::File, u64) + 'static,
 ) -> Result<(), glib::Error> {
     if cancellable.is_cancelled() {
         return Err(cancelled_err());
     }
     let info = file
         .query_info_future(
-            "standard::type",
+            "standard::type,standard::size",
             gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
             glib::Priority::DEFAULT,
         )
         .await?;
 
     if info.file_type() != gio::FileType::Directory {
-        on_item(&file);
+        on_item(&file, info.size().max(0) as u64);
         return file.delete_future(glib::Priority::DEFAULT).await;
     }
 
@@ -2973,7 +3096,7 @@ async fn delete_recursive(
         }
         let enumerator = dir
             .enumerate_children_future(
-                "standard::name,standard::type",
+                "standard::name,standard::type,standard::size",
                 gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
                 glib::Priority::DEFAULT,
             )
@@ -2996,8 +3119,10 @@ async fn delete_recursive(
                     return Err(cancelled_err());
                 }
                 let child = dir.child(child_info.name());
-                on_item(&child);
-                if child_info.file_type() == gio::FileType::Directory {
+                let is_dir = child_info.file_type() == gio::FileType::Directory;
+                let size = if is_dir { 0 } else { child_info.size().max(0) as u64 };
+                on_item(&child, size);
+                if is_dir {
                     stack.push(child);
                 } else {
                     child.delete_future(glib::Priority::DEFAULT).await?;
@@ -3011,43 +3136,46 @@ async fn delete_recursive(
         if cancellable.is_cancelled() {
             return Err(cancelled_err());
         }
-        on_item(&dir);
+        on_item(&dir, 0);
         dir.delete_future(glib::Priority::DEFAULT).await?;
     }
     Ok(())
 }
 
-/// Pre-walk a file (or directory tree) and return the total number of items
-/// that `copy_recursive` / `delete_recursive` would touch. Used by callers to
-/// drive the progress bar fraction. Honours the cancellable. Errors inside
-/// the walk (e.g. permission denied on a subdir) are silently skipped, which
-/// will under-count slightly — that's fine, the bar might end at e.g. 99%
-/// rather than overshooting.
-async fn count_items(file: gio::File, cancellable: &gio::Cancellable) -> u64 {
+/// Pre-walk a file (or directory tree) and return `(item_count, total_bytes)`.
+/// Used by callers to drive the progress bar fraction and the bytes display.
+/// Honours the cancellable. Errors inside the walk (e.g. permission denied on
+/// a subdir) are silently skipped, so totals may slightly under-count.
+async fn count_items_and_bytes(
+    file: gio::File,
+    cancellable: &gio::Cancellable,
+) -> (u64, u64) {
     let info = match file
         .query_info_future(
-            "standard::type",
+            "standard::type,standard::size",
             gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
             glib::Priority::DEFAULT,
         )
         .await
     {
         Ok(i) => i,
-        Err(_) => return 0,
+        Err(_) => return (0, 0),
     };
     if info.file_type() != gio::FileType::Directory {
-        return 1;
+        return (1, info.size().max(0) as u64);
     }
-    // Count the directory itself, plus every descendant.
+    // Count the directory itself, plus every descendant. Directories don't
+    // contribute to total_bytes (their inode size isn't user-meaningful).
     let mut count: u64 = 1;
+    let mut bytes: u64 = 0;
     let mut stack = vec![file];
     while let Some(dir) = stack.pop() {
         if cancellable.is_cancelled() {
-            return count;
+            return (count, bytes);
         }
         let enumerator = match dir
             .enumerate_children_future(
-                "standard::name,standard::type",
+                "standard::name,standard::type,standard::size",
                 gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
                 glib::Priority::DEFAULT,
             )
@@ -3058,7 +3186,7 @@ async fn count_items(file: gio::File, cancellable: &gio::Cancellable) -> u64 {
         };
         loop {
             if cancellable.is_cancelled() {
-                return count;
+                return (count, bytes);
             }
             let batch = match enumerator
                 .next_files_future(50, glib::Priority::DEFAULT)
@@ -3074,11 +3202,28 @@ async fn count_items(file: gio::File, cancellable: &gio::Cancellable) -> u64 {
                 count += 1;
                 if info.file_type() == gio::FileType::Directory {
                     stack.push(dir.child(info.name()));
+                } else {
+                    bytes += info.size().max(0) as u64;
                 }
             }
         }
     }
-    count
+    (count, bytes)
+}
+
+/// Format a duration in human-readable form: "12 s", "3 min 4 s", "1 h 23 min".
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs} s")
+    } else if secs < 3600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 { format!("{m} min") } else { format!("{m} min {s} s") }
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m == 0 { format!("{h} h") } else { format!("{h} h {m} min") }
+    }
 }
 
 /// Recursively walk a directory, accumulating total bytes and item count.
