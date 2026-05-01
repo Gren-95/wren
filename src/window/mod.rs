@@ -141,19 +141,8 @@ impl WrenWindow {
         let Some(page) = imp.tab_view.selected_page() else {
             return;
         };
-        let Some(idx) = self.current_tab_index() else {
-            return;
-        };
-        {
-            let mut tabs = imp.tabs.borrow_mut();
-            if idx < tabs.len() {
-                tabs[idx].cancel_monitor();
-                if let Some(model) = tabs[idx].dir_model.as_ref() {
-                    model.cancel();
-                }
-                tabs.remove(idx);
-            }
-        }
+        // close_page triggers connect_close_page which removes the TabState
+        // and cancels its monitor / dir_model, so we don't have to here.
         imp.tab_view.close_page(&page);
     }
 
@@ -1894,7 +1883,17 @@ impl WrenWindow {
             p
         };
 
-        let content = std::fs::read_to_string(&bookmarks_path).unwrap_or_default();
+        // Distinguish "file doesn't exist" (treat as empty) from a real I/O
+        // error (don't proceed — we'd otherwise wipe every bookmark by
+        // overwriting the file with just the new entry).
+        let content = match std::fs::read_to_string(&bookmarks_path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                self.show_toast(&format!("Could not read bookmarks: {e}"));
+                return;
+            }
+        };
         if content
             .lines()
             .any(|line| line.split_whitespace().next() == Some(uri.as_str()))
@@ -2990,7 +2989,16 @@ impl WrenWindow {
             p.push("bookmarks");
             p
         };
-        let content = std::fs::read_to_string(&bookmarks_path).unwrap_or_default();
+        // If we can't read the file, do NOT proceed — overwriting on a
+        // transient I/O error would wipe every other bookmark too.
+        let content = match std::fs::read_to_string(&bookmarks_path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                self.show_toast(&format!("Could not read bookmarks: {e}"));
+                return;
+            }
+        };
         let new_content: String = content
             .lines()
             .filter(|line| line.split_whitespace().next() != Some(uri))

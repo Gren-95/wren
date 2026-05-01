@@ -281,11 +281,36 @@ impl ObjectImpl for WrenWindow {
 
         self.zoom_level.set(3);
 
-        // Close-page: always confirm (we guard against closing the last tab in close_tab)
-        self.tab_view.connect_close_page(|tab_view, page| {
-            tab_view.close_page_finish(page, true);
-            glib::Propagation::Stop
-        });
+        // Close-page: triggered for both Ctrl+W (via close_tab → close_page)
+        // and the per-tab close button. Refuse to close the last tab so the
+        // window doesn't end up empty, otherwise drop the matching TabState
+        // (cancelling its monitor + dir_model load) before letting GTK
+        // detach the page.
+        self.tab_view.connect_close_page(glib::clone!(
+            #[weak]
+            obj,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |tab_view, page| {
+                if tab_view.n_pages() <= 1 {
+                    tab_view.close_page_finish(page, false);
+                    return glib::Propagation::Stop;
+                }
+                let child = page.child();
+                {
+                    let mut tabs = obj.imp().tabs.borrow_mut();
+                    if let Some(idx) = tabs.iter().position(|t| t.content_widget == child) {
+                        tabs[idx].cancel_monitor();
+                        if let Some(model) = tabs[idx].dir_model.as_ref() {
+                            model.cancel();
+                        }
+                        tabs.remove(idx);
+                    }
+                }
+                tab_view.close_page_finish(page, true);
+                glib::Propagation::Stop
+            }
+        ));
 
         // When selected tab changes, update breadcrumb and nav buttons
         self.tab_view.connect_selected_page_notify(glib::clone!(
