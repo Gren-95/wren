@@ -1578,32 +1578,40 @@ impl WrenWindow {
 
     pub fn show_properties(&self) {
         let objs = self.selected_file_objects();
-        // Show current directory properties if nothing selected
         let file_obj = objs.first().cloned();
-        let (name, content_type, file_size, path_str) = if let Some(ref obj) = file_obj {
-            let path = obj
-                .file()
-                .path()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            (obj.name(), obj.content_type(), obj.file_size(), path)
-        } else {
-            let Some(idx) = self.current_tab_index() else {
-                return;
+        // Resolve a gio::File for the subject (selected item, or current dir).
+        let (target, name, content_type, file_size, path_str, is_directory) =
+            if let Some(ref obj) = file_obj {
+                let path = obj
+                    .file()
+                    .path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                (
+                    obj.file().clone(),
+                    obj.name(),
+                    obj.content_type(),
+                    obj.file_size(),
+                    path,
+                    obj.is_directory(),
+                )
+            } else {
+                let Some(idx) = self.current_tab_index() else {
+                    return;
+                };
+                let tabs = self.imp().tabs.borrow();
+                let Some(tab) = tabs.get(idx) else { return };
+                let Some(loc) = tab.navigation.current() else { return };
+                let name = loc
+                    .basename()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Folder".to_string());
+                let path = loc
+                    .path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                (loc.clone(), name.into(), "inode/directory".into(), 0u64, path, true)
             };
-            let tabs = self.imp().tabs.borrow();
-            let Some(tab) = tabs.get(idx) else { return };
-            let Some(loc) = tab.navigation.current() else { return };
-            let name = loc
-                .basename()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Folder".to_string());
-            let path = loc
-                .path()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            (name.into(), "inode/directory".into(), 0u64, path)
-        };
 
         let dialog = adw::PreferencesDialog::new();
         dialog.set_title("Properties");
@@ -1630,7 +1638,47 @@ impl WrenWindow {
         };
         add_row(&group, "Type", &type_str);
 
-        if file_size > 0 || file_obj.as_ref().map(|o| !o.is_directory()).unwrap_or(false) {
+        if is_directory {
+            // Directory: kick off async recursive size calculation.
+            let size_row = adw::ActionRow::new();
+            size_row.set_title("Size");
+            let size_label = gtk4::Label::new(Some("Calculating…"));
+            size_label.add_css_class("dim-label");
+            size_row.add_suffix(&size_label);
+            group.add(&size_row);
+
+            let cancellable = gio::Cancellable::new();
+            // Cancel the walk if the dialog is closed before it finishes.
+            dialog.connect_closed(glib::clone!(
+                #[strong]
+                cancellable,
+                move |_| cancellable.cancel()
+            ));
+            glib::spawn_future_local(glib::clone!(
+                #[weak]
+                size_label,
+                #[strong]
+                cancellable,
+                async move {
+                    let (total, count) = compute_dir_size(target, &cancellable, |t, c| {
+                        size_label.set_text(&format!(
+                            "{} ({} items, calculating…)",
+                            format_file_size(t),
+                            c
+                        ));
+                    })
+                    .await;
+                    if !cancellable.is_cancelled() {
+                        size_label.set_text(&format!(
+                            "{} ({} item{})",
+                            format_file_size(total),
+                            count,
+                            if count == 1 { "" } else { "s" }
+                        ));
+                    }
+                }
+            ));
+        } else if file_size > 0 || !is_directory {
             add_row(&group, "Size", &format_file_size(file_size));
         }
 
@@ -2661,6 +2709,66 @@ async fn delete_recursive(
         dir.delete_future(glib::Priority::DEFAULT).await?;
     }
     Ok(())
+}
+
+/// Recursively walk a directory, accumulating total bytes and item count.
+/// Calls `on_update` periodically so a UI label can show live progress.
+/// Honours the cancellable; returns the partial total if cancelled.
+async fn compute_dir_size(
+    root: gio::File,
+    cancellable: &gio::Cancellable,
+    on_update: impl Fn(u64, u64),
+) -> (u64, u64) {
+    let mut total: u64 = 0;
+    let mut count: u64 = 0;
+    let mut stack = vec![root];
+    let mut last_emit = std::time::Instant::now();
+    let emit_every = std::time::Duration::from_millis(120);
+
+    while let Some(dir) = stack.pop() {
+        if cancellable.is_cancelled() {
+            return (total, count);
+        }
+        let enumerator = match dir
+            .enumerate_children_future(
+                "standard::name,standard::type,standard::size",
+                gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                glib::Priority::DEFAULT,
+            )
+            .await
+        {
+            Ok(e) => e,
+            Err(_) => continue, // permission denied etc — skip this subdir
+        };
+        loop {
+            if cancellable.is_cancelled() {
+                return (total, count);
+            }
+            let batch = match enumerator
+                .next_files_future(50, glib::Priority::DEFAULT)
+                .await
+            {
+                Ok(b) => b,
+                Err(_) => break,
+            };
+            if batch.is_empty() {
+                break;
+            }
+            for info in batch {
+                count += 1;
+                let size = info.size().max(0) as u64;
+                total += size;
+                if info.file_type() == gio::FileType::Directory {
+                    stack.push(dir.child(info.name()));
+                }
+                if last_emit.elapsed() >= emit_every {
+                    on_update(total, count);
+                    last_emit = std::time::Instant::now();
+                }
+            }
+        }
+    }
+    (total, count)
 }
 
 fn format_file_size(bytes: u64) -> String {
