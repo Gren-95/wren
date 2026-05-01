@@ -372,6 +372,22 @@ impl OpHandle {
         }
     }
 
+    /// Like `delete_callback` but doesn't tick the cumulative counter — only
+    /// updates the path labels. Used by Replace's pre-delete in paste / drop,
+    /// where the items being deleted aren't in the pre-walked total.
+    pub fn paths_only_callback(&self) -> impl Fn(&gio::File, u64) + 'static {
+        let h = self.clone();
+        let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+        move |s, _size| {
+            let now = std::time::Instant::now();
+            if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
+                return;
+            }
+            last.set(now);
+            h.set_paths(s, None);
+        }
+    }
+
     /// Build a per-sub-item callback for `delete_recursive`.
     pub fn delete_callback(&self) -> impl Fn(&gio::File, u64) + 'static {
         let h = self.clone();

@@ -1722,24 +1722,10 @@ impl WrenWindow {
                             // Replace's pre-delete: show path activity but
                             // don't tick the main counter (these items aren't
                             // in the pre-walked total).
-                            let h = handle.clone();
-                            let last = std::rc::Rc::new(std::cell::Cell::new(
-                                std::time::Instant::now(),
-                            ));
-                            let pre_delete_cb = move |s: &gio::File, _size: u64| {
-                                let now = std::time::Instant::now();
-                                if now.duration_since(last.get())
-                                    < std::time::Duration::from_millis(40)
-                                {
-                                    return;
-                                }
-                                last.set(now);
-                                h.set_paths(s, None);
-                            };
                             if let Err(e) = delete_recursive(
                                 dest_initial.clone(),
                                 &handle.cancellable,
-                                pre_delete_cb,
+                                handle.paths_only_callback(),
                             )
                             .await
                             {
@@ -2766,24 +2752,10 @@ impl WrenWindow {
                             // Replace's pre-delete: show path activity but
                             // don't tick the main counter (these items aren't
                             // in the pre-walked total).
-                            let h = handle.clone();
-                            let last = std::rc::Rc::new(std::cell::Cell::new(
-                                std::time::Instant::now(),
-                            ));
-                            let pre_delete_cb = move |s: &gio::File, _size: u64| {
-                                let now = std::time::Instant::now();
-                                if now.duration_since(last.get())
-                                    < std::time::Duration::from_millis(40)
-                                {
-                                    return;
-                                }
-                                last.set(now);
-                                h.set_paths(s, None);
-                            };
                             if let Err(e) = delete_recursive(
                                 dest_initial.clone(),
                                 &handle.cancellable,
-                                pre_delete_cb,
+                                handle.paths_only_callback(),
                             )
                             .await
                             {
