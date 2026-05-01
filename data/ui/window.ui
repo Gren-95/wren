@@ -7,12 +7,6 @@
     <child>
       <object class="AdwToolbarView">
         <child type="top">
-          <object class="AdwBanner" id="op_banner">
-            <property name="revealed">false</property>
-            <property name="button-label">Cancel</property>
-          </object>
-        </child>
-        <child type="top">
           <object class="AdwHeaderBar" id="header_bar">
             <child type="start">
               <object class="GtkToggleButton" id="sidebar_button">
@@ -52,6 +46,16 @@
             <child type="end">
               <object class="GtkMenuButton" id="menu_button">
                 <property name="icon-name">open-menu-symbolic</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkMenuButton" id="op_button">
+                <property name="icon-name">document-save-symbolic</property>
+                <property name="visible">false</property>
+                <property name="tooltip-text">File operations in progress</property>
                 <style>
                   <class name="flat"/>
                 </style>

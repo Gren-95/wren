@@ -1137,18 +1137,15 @@ impl WrenWindow {
                     }
                     let to_delete = not_supported.clone();
                     let total = to_delete.len();
-                    let cancellable = window.op_start(&format!(
-                        "Deleting {total} item{}",
-                        if total == 1 { "" } else { "s" }
-                    ));
+                    let handle = window.op_start("Deleting");
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
                         #[strong]
-                        cancellable,
+                        handle,
                         async move {
                             for (idx, f) in to_delete.iter().enumerate() {
-                                if cancellable.is_cancelled() {
+                                if handle.cancellable.is_cancelled() {
                                     break;
                                 }
                                 log_op("delete (trash unsupported)", f, None);
@@ -1156,19 +1153,18 @@ impl WrenWindow {
                                     .basename()
                                     .map(|p| p.to_string_lossy().into_owned())
                                     .unwrap_or_default();
-                                window.op_update(&format!(
-                                    "Deleting {name} ({} of {total})",
-                                    idx + 1
-                                ));
-                                if let Err(e) = delete_recursive(f.clone(), &cancellable).await {
+                                handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                                handle.set_fraction(idx as f64 / total as f64);
+                                if let Err(e) = delete_recursive(f.clone(), &handle.cancellable).await {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete (trash unsupported)", f, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
                                     break;
                                 }
+                                handle.set_fraction((idx + 1) as f64 / total as f64);
                             }
-                            window.op_finish(&cancellable);
+                            window.op_finish(&handle);
                             window.reload();
                         }
                     ));
@@ -1208,18 +1204,15 @@ impl WrenWindow {
                     }
                     let files = files_clone.clone();
                     let total = files.len();
-                    let cancellable = window.op_start(&format!(
-                        "Deleting {total} item{}",
-                        if total == 1 { "" } else { "s" }
-                    ));
+                    let handle = window.op_start("Deleting");
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
                         #[strong]
-                        cancellable,
+                        handle,
                         async move {
                             for (idx, file) in files.iter().enumerate() {
-                                if cancellable.is_cancelled() {
+                                if handle.cancellable.is_cancelled() {
                                     break;
                                 }
                                 log_op("delete", file, None);
@@ -1227,19 +1220,18 @@ impl WrenWindow {
                                     .basename()
                                     .map(|p| p.to_string_lossy().into_owned())
                                     .unwrap_or_default();
-                                window.op_update(&format!(
-                                    "Deleting {name} ({} of {total})",
-                                    idx + 1
-                                ));
-                                if let Err(e) = delete_recursive(file.clone(), &cancellable).await {
+                                handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                                handle.set_fraction(idx as f64 / total as f64);
+                                if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete", file, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
                                     break;
                                 }
+                                handle.set_fraction((idx + 1) as f64 / total as f64);
                             }
-                            window.op_finish(&cancellable);
+                            window.op_finish(&handle);
                             window.reload();
                         }
                     ));
@@ -1308,16 +1300,16 @@ impl WrenWindow {
         };
         let action_label = if is_cut { "Moving" } else { "Copying" };
         let total = files.len();
-        let cancellable = self.op_start(&format!("{action_label} {total} item{}", if total == 1 { "" } else { "s" }));
+        let handle = self.op_start(action_label);
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
             #[strong]
-            cancellable,
+            handle,
             async move {
                 let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
-                    if cancellable.is_cancelled() {
+                    if handle.cancellable.is_cancelled() {
                         break;
                     }
                     let Some(name) = file.basename() else {
@@ -1329,10 +1321,8 @@ impl WrenWindow {
                     }
                     let action = if is_cut { "move" } else { "copy" };
                     let display_name = name.to_string_lossy();
-                    window.op_update(&format!(
-                        "{action_label} {display_name} ({} of {total})",
-                        idx + 1
-                    ));
+                    handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
+                    handle.set_fraction(idx as f64 / total as f64);
 
                     let dest_initial = dest_dir.child(&name);
                     let collides = !dest_initial.equal(file)
@@ -1355,7 +1345,7 @@ impl WrenWindow {
                         ConflictResolution::Skip => continue,
                         ConflictResolution::Cancel => break,
                         ConflictResolution::Replace => {
-                            if let Err(e) = delete_recursive(dest_initial.clone(), &cancellable).await {
+                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable).await {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
@@ -1368,7 +1358,7 @@ impl WrenWindow {
                     };
                     log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &cancellable).await {
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable).await {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not paste: {e}"));
@@ -1377,7 +1367,7 @@ impl WrenWindow {
                     }
                     if is_cut {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone(), &cancellable).await {
+                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not move: {e}"));
@@ -1385,13 +1375,14 @@ impl WrenWindow {
                             break;
                         }
                     }
+                    handle.set_fraction((idx + 1) as f64 / total as f64);
                 }
                 if is_cut {
                     window.imp().clipboard_files.replace(None);
                     window.update_cut_indicator(&[]);
                     window.update_selection_actions();
                 }
-                window.op_finish(&cancellable);
+                window.op_finish(&handle);
                 window.reload();
             }
         ));
@@ -2091,42 +2082,30 @@ impl WrenWindow {
 
     // ── File-operation progress + cancel ─────────────────────────────────────
     //
-    // Each long-running file op asks for a Cancellable via `op_start`, updates
-    // the banner label as it goes via `op_update`, and calls `op_finish` when
-    // done (success or error). The banner's Cancel button cancels every
-    // currently-active op via `cancel_all_ops`.
+    // Each long-running op calls `op_start(title)` which returns an OpHandle
+    // wrapping a Cancellable plus widgets in the header-bar popover (title
+    // label, current-item label, ProgressBar, per-op Cancel button). Callers
+    // update via methods on the handle and call `op_finish` when done.
 
-    pub fn op_start(&self, label: &str) -> gio::Cancellable {
+    pub fn op_start(&self, title: &str) -> OpHandle {
         let imp = self.imp();
-        let c = gio::Cancellable::new();
-        imp.op_cancellables.borrow_mut().push(c.clone());
-        imp.op_banner.set_title(label);
-        imp.op_banner.set_revealed(true);
-        c
+        let handle = OpHandle::build(title);
+        imp.op_popover_box.append(&handle.row);
+        imp.op_handles.borrow_mut().push(handle.clone());
+        imp.op_button.set_visible(true);
+        handle
     }
 
-    pub fn op_update(&self, label: &str) {
+    pub fn op_finish(&self, handle: &OpHandle) {
         let imp = self.imp();
-        if !imp.op_cancellables.borrow().is_empty() {
-            imp.op_banner.set_title(label);
-        }
-    }
-
-    pub fn op_finish(&self, c: &gio::Cancellable) {
-        let imp = self.imp();
-        let mut active = imp.op_cancellables.borrow_mut();
-        active.retain(|x| x != c);
+        imp.op_popover_box.remove(&handle.row);
+        let mut active = imp.op_handles.borrow_mut();
+        active.retain(|h| h.cancellable != handle.cancellable);
         if active.is_empty() {
-            imp.op_banner.set_revealed(false);
-        } else {
-            imp.op_banner
-                .set_title(&format!("{} operations in progress", active.len()));
-        }
-    }
-
-    pub fn cancel_all_ops(&self) {
-        for c in self.imp().op_cancellables.borrow().iter() {
-            c.cancel();
+            imp.op_button.set_visible(false);
+            if let Some(p) = imp.op_button.popover() {
+                p.popdown();
+            }
         }
     }
 
@@ -2223,21 +2202,23 @@ impl WrenWindow {
                 .basename()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let cancellable = self.op_start(&format!("Duplicating {display_name}"));
+            let handle = self.op_start("Duplicating");
+            handle.set_item(&display_name);
             glib::spawn_future_local(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
                 #[strong]
-                cancellable,
+                handle,
                 async move {
                     log_op("duplicate", &file, Some(&dest_file));
-                    match copy_recursive(file.clone(), dest_file.clone(), &cancellable).await {
+                    match copy_recursive(file.clone(), dest_file.clone(), &handle.cancellable).await {
                         Ok(()) => {
-                            window.op_finish(&cancellable);
+                            handle.set_fraction(1.0);
+                            window.op_finish(&handle);
                             window.reload();
                         }
                         Err(e) => {
-                            window.op_finish(&cancellable);
+                            window.op_finish(&handle);
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("duplicate", &file, Some(&dest_file), &e);
                                 window.show_toast(&format!("Could not duplicate: {e}"));
@@ -2262,19 +2243,16 @@ impl WrenWindow {
         };
         let action_label = if is_move { "Moving" } else { "Copying" };
         let total = files.len();
-        let cancellable = self.op_start(&format!(
-            "{action_label} {total} item{}",
-            if total == 1 { "" } else { "s" }
-        ));
+        let handle = self.op_start(action_label);
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
             #[strong]
-            cancellable,
+            handle,
             async move {
                 let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
-                    if cancellable.is_cancelled() {
+                    if handle.cancellable.is_cancelled() {
                         break;
                     }
                     let Some(name) = file.basename() else { continue };
@@ -2282,10 +2260,8 @@ impl WrenWindow {
                     if dest_dir.child(&name).equal(file) { continue; }
                     let action = if is_move { "drop-move" } else { "drop-copy" };
                     let display_name = name.to_string_lossy();
-                    window.op_update(&format!(
-                        "{action_label} {display_name} ({} of {total})",
-                        idx + 1
-                    ));
+                    handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
+                    handle.set_fraction(idx as f64 / total as f64);
 
                     let dest_initial = dest_dir.child(&name);
                     let collides = !dest_initial.equal(file)
@@ -2308,7 +2284,7 @@ impl WrenWindow {
                         ConflictResolution::Skip => continue,
                         ConflictResolution::Cancel => break,
                         ConflictResolution::Replace => {
-                            if let Err(e) = delete_recursive(dest_initial.clone(), &cancellable).await {
+                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable).await {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
@@ -2321,7 +2297,7 @@ impl WrenWindow {
                     };
                     log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &cancellable).await {
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable).await {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not copy: {e}"));
@@ -2330,7 +2306,7 @@ impl WrenWindow {
                     }
                     if is_move {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone(), &cancellable).await {
+                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not remove source: {e}"));
@@ -2338,8 +2314,9 @@ impl WrenWindow {
                             break;
                         }
                     }
+                    handle.set_fraction((idx + 1) as f64 / total as f64);
                 }
-                window.op_finish(&cancellable);
+                window.op_finish(&handle);
                 window.reload();
             }
         ));
@@ -2559,6 +2536,71 @@ pub enum ConflictResolution {
     Replace,
     Rename,
     Cancel,
+}
+
+/// A handle to one in-flight file operation. Holds its Cancellable and the
+/// widgets that display its progress in the header-bar popover. Cloning is
+/// cheap — every field is a reference-counted GObject (or a Cancellable, which
+/// is also a GObject).
+#[derive(Clone, Debug)]
+pub struct OpHandle {
+    pub cancellable: gio::Cancellable,
+    pub row: gtk4::Box,
+    item_label: gtk4::Label,
+    progress: gtk4::ProgressBar,
+}
+
+impl OpHandle {
+    fn build(title: &str) -> Self {
+        let cancellable = gio::Cancellable::new();
+        let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+        row.set_width_request(320);
+        row.set_margin_top(4);
+        row.set_margin_bottom(4);
+
+        let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        let title_label = gtk4::Label::new(Some(title));
+        title_label.set_xalign(0.0);
+        title_label.set_hexpand(true);
+        title_label.add_css_class("heading");
+        let cancel_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        cancel_btn.set_tooltip_text(Some("Cancel"));
+        cancel_btn.add_css_class("flat");
+        cancel_btn.add_css_class("circular");
+        let c_clone = cancellable.clone();
+        cancel_btn.connect_clicked(move |_| c_clone.cancel());
+        header.append(&title_label);
+        header.append(&cancel_btn);
+
+        let item_label = gtk4::Label::new(Some(""));
+        item_label.set_xalign(0.0);
+        item_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        item_label.set_max_width_chars(40);
+        item_label.add_css_class("caption");
+        item_label.add_css_class("dim-label");
+
+        let progress = gtk4::ProgressBar::new();
+        progress.set_show_text(true);
+        progress.set_text(Some("0%"));
+
+        row.append(&header);
+        row.append(&item_label);
+        row.append(&progress);
+
+        Self { cancellable, row, item_label, progress }
+    }
+
+    /// Update the second-line label (current filename + counter).
+    pub fn set_item(&self, msg: &str) {
+        self.item_label.set_text(msg);
+    }
+
+    /// Set the progress bar fraction (0.0 — 1.0) and its overlay text to a %.
+    pub fn set_fraction(&self, fraction: f64) {
+        let f = fraction.clamp(0.0, 1.0);
+        self.progress.set_fraction(f);
+        self.progress.set_text(Some(&format!("{}%", (f * 100.0).round() as u32)));
+    }
 }
 
 async fn copy_recursive(

@@ -44,7 +44,7 @@ pub struct WrenWindow {
     #[template_child]
     pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
     #[template_child]
-    pub op_banner: TemplateChild<adw::Banner>,
+    pub op_button: TemplateChild<gtk4::MenuButton>,
 
     pub tabs: RefCell<Vec<TabState>>,
     pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
@@ -54,7 +54,11 @@ pub struct WrenWindow {
     pub zoom_adjustment: gtk4::Adjustment,
     pub undo_stack: RefCell<Vec<UndoOp>>,
     pub redo_stack: RefCell<Vec<UndoOp>>,
-    pub op_cancellables: RefCell<Vec<gio::Cancellable>>,
+    /// Vertical Box inside the op_button's popover that holds one row per
+    /// active operation.
+    pub op_popover_box: gtk4::Box,
+    /// Active operations (cancellable + the row widget that displays them).
+    pub op_handles: RefCell<Vec<crate::window::OpHandle>>,
 }
 
 impl Default for WrenWindow {
@@ -75,7 +79,7 @@ impl Default for WrenWindow {
             menu_button: Default::default(),
             view_button: Default::default(),
             breadcrumb_bar: Default::default(),
-            op_banner: Default::default(),
+            op_button: Default::default(),
             tabs: Default::default(),
             clipboard_files: Default::default(),
             show_hidden: Default::default(),
@@ -84,7 +88,8 @@ impl Default for WrenWindow {
             zoom_adjustment: gtk4::Adjustment::new(3.0, 1.0, 5.0, 1.0, 1.0, 0.0),
             undo_stack: Default::default(),
             redo_stack: Default::default(),
-            op_cancellables: Default::default(),
+            op_popover_box: gtk4::Box::new(gtk4::Orientation::Vertical, 4),
+            op_handles: Default::default(),
         }
     }
 }
@@ -529,14 +534,22 @@ impl ObjectImpl for WrenWindow {
             obj.imp().zoom_adjustment.set_value(zl as f64);
         }
 
-        // Op banner Cancel button → cancel every running file operation.
-        obj.imp().op_banner.connect_button_clicked(glib::clone!(
-            #[weak]
-            obj,
-            move |_| {
-                obj.cancel_all_ops();
-            }
-        ));
+        // File-operation popover: a vertical Box inside the op_button's
+        // Popover. One row per active op is appended/removed via op_start /
+        // op_finish. The button itself uses an AdwSpinner so the user can see
+        // at a glance that something is in progress.
+        {
+            let imp = obj.imp();
+            imp.op_popover_box.set_margin_top(6);
+            imp.op_popover_box.set_margin_bottom(6);
+            imp.op_popover_box.set_margin_start(6);
+            imp.op_popover_box.set_margin_end(6);
+            let popover = gtk4::Popover::new();
+            popover.set_child(Some(&imp.op_popover_box));
+            imp.op_button.set_popover(Some(&popover));
+            let spinner = adw::Spinner::new();
+            imp.op_button.set_child(Some(&spinner));
+        }
 
         // Sidebar toggle button — keep split_view and button in sync
         obj.imp().sidebar_button.connect_toggled(glib::clone!(
