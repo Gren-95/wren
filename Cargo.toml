@@ -2,6 +2,7 @@
 name = "wren"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 gtk4 = { version = "0.11", features = ["v4_12"] }

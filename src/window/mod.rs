@@ -2477,7 +2477,7 @@ impl WrenWindow {
             .developer_name("Wren contributors")
             .website("https://github.com/Gren-95/wren")
             .issue_url("https://github.com/Gren-95/wren/issues")
-            .license_type(gtk4::License::MitX11)
+            .license_type(gtk4::License::Gpl30)
             .build();
         dialog.present(Some(self));
     }
