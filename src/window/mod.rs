@@ -2666,6 +2666,28 @@ fn cancelled_err() -> glib::Error {
     glib::Error::new(gio::IOErrorEnum::Cancelled, "Operation cancelled")
 }
 
+/// Build a "From  /path/to/foo" row used inside an OpHandle. Returns the
+/// outer Box and the value Label so the OpHandle can update / hide them.
+fn make_path_row(prefix: &str) -> (gtk4::Box, gtk4::Label) {
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let prefix_label = gtk4::Label::new(Some(prefix));
+    prefix_label.set_xalign(0.0);
+    prefix_label.set_width_chars(4);
+    prefix_label.set_max_width_chars(4);
+    prefix_label.add_css_class("caption");
+    prefix_label.add_css_class("dim-label");
+    let value = gtk4::Label::new(None);
+    value.set_xalign(0.0);
+    value.set_hexpand(true);
+    value.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+    value.add_css_class("caption");
+    value.add_css_class("monospace");
+    value.set_selectable(true);
+    row.append(&prefix_label);
+    row.append(&value);
+    (row, value)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum ConflictResolution {
     Skip,
@@ -2682,22 +2704,25 @@ pub enum ConflictResolution {
 pub struct OpHandle {
     pub cancellable: gio::Cancellable,
     pub row: gtk4::Box,
-    /// Expander whose label is the current item summary; expanding it reveals
-    /// the verbose source / destination paths.
-    expander: gtk4::Expander,
-    src_label: gtk4::Label,
-    dest_label: gtk4::Label,
+    item_label: gtk4::Label,
     progress: gtk4::ProgressBar,
+    src_row: gtk4::Box,
+    src_label: gtk4::Label,
+    dest_row: gtk4::Box,
+    dest_label: gtk4::Label,
 }
 
 impl OpHandle {
     fn build(title: &str) -> Self {
         let cancellable = gio::Cancellable::new();
-        let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-        row.set_width_request(360);
-        row.set_margin_top(4);
-        row.set_margin_bottom(4);
+        let row = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        row.set_width_request(380);
+        row.set_margin_top(6);
+        row.set_margin_bottom(6);
+        row.set_margin_start(4);
+        row.set_margin_end(4);
 
+        // ── Header: bold title + flat circular Cancel button ────────────────
         let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         let title_label = gtk4::Label::new(Some(title));
         title_label.set_xalign(0.0);
@@ -2712,70 +2737,61 @@ impl OpHandle {
         header.append(&title_label);
         header.append(&cancel_btn);
 
+        // ── Current item: filename + counter (single emphasised line) ───────
+        let item_label = gtk4::Label::new(Some("Preparing…"));
+        item_label.set_xalign(0.0);
+        item_label.set_hexpand(true);
+        item_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+
+        // ── Progress bar with overlay percent ───────────────────────────────
         let progress = gtk4::ProgressBar::new();
         progress.set_show_text(true);
         progress.set_text(Some("0%"));
 
-        // Expander: label is a brief item summary ("foo.txt (3 of 17)");
-        // expanding it shows the full source and destination paths.
-        let expander = gtk4::Expander::new(Some(""));
-        expander.set_resize_toplevel(false);
-        let details_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-        details_box.set_margin_top(4);
-        details_box.set_margin_start(18);
-
-        let src_label = gtk4::Label::new(None);
-        src_label.set_xalign(0.0);
-        src_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-        src_label.set_max_width_chars(48);
-        src_label.add_css_class("caption");
-        src_label.add_css_class("dim-label");
-        src_label.set_selectable(true);
-
-        let dest_label = gtk4::Label::new(None);
-        dest_label.set_xalign(0.0);
-        dest_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-        dest_label.set_max_width_chars(48);
-        dest_label.add_css_class("caption");
-        dest_label.add_css_class("dim-label");
-        dest_label.set_selectable(true);
-
-        details_box.append(&src_label);
-        details_box.append(&dest_label);
-        expander.set_child(Some(&details_box));
+        // ── Path rows: From / To, always visible (no expander) ──────────────
+        let (src_row, src_label) = make_path_row("From");
+        let (dest_row, dest_label) = make_path_row("To");
+        // Hidden until set_paths is first called so blank rows don't take up
+        // space while the op is in the pre-walk phase.
+        src_row.set_visible(false);
+        dest_row.set_visible(false);
 
         row.append(&header);
+        row.append(&item_label);
         row.append(&progress);
-        row.append(&expander);
+        row.append(&src_row);
+        row.append(&dest_row);
 
         Self {
             cancellable,
             row,
-            expander,
-            src_label,
-            dest_label,
+            item_label,
             progress,
+            src_row,
+            src_label,
+            dest_row,
+            dest_label,
         }
     }
 
-    /// Set the brief item summary shown next to the disclosure arrow.
+    /// Set the current item line (filename + counter, e.g. "foo.txt (3 of 17)").
     pub fn set_item(&self, msg: &str) {
-        self.expander.set_label(Some(msg));
+        self.item_label.set_text(msg);
     }
 
-    /// Set the verbose source / destination paths shown when the row is
-    /// expanded. Pass `None` for `dest` on operations that don't have one
-    /// (e.g. delete).
+    /// Set the source / destination path rows. Pass `None` for `dest` on
+    /// operations that have no destination (e.g. delete).
     pub fn set_paths(&self, src: &gio::File, dest: Option<&gio::File>) {
-        self.src_label.set_text(&format!("From: {}", fmt_path(src)));
+        self.src_label.set_text(&fmt_path(src));
+        self.src_row.set_visible(true);
         match dest {
             Some(d) => {
-                self.dest_label.set_text(&format!("To: {}", fmt_path(d)));
-                self.dest_label.set_visible(true);
+                self.dest_label.set_text(&fmt_path(d));
+                self.dest_row.set_visible(true);
             }
             None => {
                 self.dest_label.set_text("");
-                self.dest_label.set_visible(false);
+                self.dest_row.set_visible(false);
             }
         }
     }

@@ -143,3 +143,9 @@ button.wren-breadcrumb:drop(active) {
   outline: 2px solid alpha(@accent_color, 0.6);
   outline-offset: -2px;
 }
+
+/* ── File-operation popover rows ──────────────────────────────────────────
+   Separator between stacked operation rows; subtle, matches dim-label. */
+popover.menu > arrow.top,
+popover.menu > arrow.bottom { /* no-op selector to keep grouping above */ }
+
