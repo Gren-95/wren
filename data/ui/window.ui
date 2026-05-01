@@ -7,6 +7,12 @@
     <child>
       <object class="AdwToolbarView">
         <child type="top">
+          <object class="AdwBanner" id="op_banner">
+            <property name="revealed">false</property>
+            <property name="button-label">Cancel</property>
+          </object>
+        </child>
+        <child type="top">
           <object class="AdwHeaderBar" id="header_bar">
             <child type="start">
               <object class="GtkToggleButton" id="sidebar_button">

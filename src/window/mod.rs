@@ -1136,17 +1136,39 @@ impl WrenWindow {
                         return;
                     }
                     let to_delete = not_supported.clone();
+                    let total = to_delete.len();
+                    let cancellable = window.op_start(&format!(
+                        "Deleting {total} item{}",
+                        if total == 1 { "" } else { "s" }
+                    ));
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
+                        #[strong]
+                        cancellable,
                         async move {
-                            for f in to_delete {
-                                log_op("delete (trash unsupported)", &f, None);
-                                if let Err(e) = delete_recursive(f.clone()).await {
-                                    log_err("delete (trash unsupported)", &f, None, &e);
-                                    window.show_toast(&format!("Could not delete: {e}"));
+                            for (idx, f) in to_delete.iter().enumerate() {
+                                if cancellable.is_cancelled() {
+                                    break;
+                                }
+                                log_op("delete (trash unsupported)", f, None);
+                                let name = f
+                                    .basename()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                window.op_update(&format!(
+                                    "Deleting {name} ({} of {total})",
+                                    idx + 1
+                                ));
+                                if let Err(e) = delete_recursive(f.clone(), &cancellable).await {
+                                    if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                        log_err("delete (trash unsupported)", f, None, &e);
+                                        window.show_toast(&format!("Could not delete: {e}"));
+                                    }
+                                    break;
                                 }
                             }
+                            window.op_finish(&cancellable);
                             window.reload();
                         }
                     ));
@@ -1185,18 +1207,39 @@ impl WrenWindow {
                         return;
                     }
                     let files = files_clone.clone();
+                    let total = files.len();
+                    let cancellable = window.op_start(&format!(
+                        "Deleting {total} item{}",
+                        if total == 1 { "" } else { "s" }
+                    ));
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
+                        #[strong]
+                        cancellable,
                         async move {
-                            for file in files {
-                                log_op("delete", &file, None);
-                                if let Err(e) = delete_recursive(file.clone()).await {
-                                    log_err("delete", &file, None, &e);
-                                    window.show_toast(&format!("Could not delete: {e}"));
-                                    return;
+                            for (idx, file) in files.iter().enumerate() {
+                                if cancellable.is_cancelled() {
+                                    break;
+                                }
+                                log_op("delete", file, None);
+                                let name = file
+                                    .basename()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                window.op_update(&format!(
+                                    "Deleting {name} ({} of {total})",
+                                    idx + 1
+                                ));
+                                if let Err(e) = delete_recursive(file.clone(), &cancellable).await {
+                                    if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                        log_err("delete", file, None, &e);
+                                        window.show_toast(&format!("Could not delete: {e}"));
+                                    }
+                                    break;
                                 }
                             }
+                            window.op_finish(&cancellable);
                             window.reload();
                         }
                     ));
@@ -1263,11 +1306,19 @@ impl WrenWindow {
             self.show_toast("Nothing to paste");
             return;
         };
+        let action_label = if is_cut { "Moving" } else { "Copying" };
+        let total = files.len();
+        let cancellable = self.op_start(&format!("{action_label} {total} item{}", if total == 1 { "" } else { "s" }));
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
+            #[strong]
+            cancellable,
             async move {
-                for file in &files {
+                for (idx, file) in files.iter().enumerate() {
+                    if cancellable.is_cancelled() {
+                        break;
+                    }
                     let Some(name) = file.basename() else {
                         continue;
                     };
@@ -1278,18 +1329,28 @@ impl WrenWindow {
                     let dest = unique_dest(&dest_dir, &name);
                     let action = if is_cut { "move" } else { "copy" };
                     log_op(action, file, Some(&dest));
+                    let display_name = name.to_string_lossy();
+                    window.op_update(&format!(
+                        "{action_label} {} ({} of {total})",
+                        display_name,
+                        idx + 1
+                    ));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone()).await {
-                        log_err(action, file, Some(&dest), &e);
-                        window.show_toast(&format!("Could not paste: {e}"));
-                        return;
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &cancellable).await {
+                        if !e.matches(gio::IOErrorEnum::Cancelled) {
+                            log_err(action, file, Some(&dest), &e);
+                            window.show_toast(&format!("Could not paste: {e}"));
+                        }
+                        break;
                     }
                     if is_cut {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone()).await {
-                            log_err("delete (post-move)", file, None, &e);
-                            window.show_toast(&format!("Could not move: {e}"));
-                            return;
+                        if let Err(e) = delete_recursive(file.clone(), &cancellable).await {
+                            if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                log_err("delete (post-move)", file, None, &e);
+                                window.show_toast(&format!("Could not move: {e}"));
+                            }
+                            break;
                         }
                     }
                 }
@@ -1298,6 +1359,7 @@ impl WrenWindow {
                     window.update_cut_indicator(&[]);
                     window.update_selection_actions();
                 }
+                window.op_finish(&cancellable);
                 window.reload();
             }
         ));
@@ -1947,6 +2009,47 @@ impl WrenWindow {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
     }
 
+    // ── File-operation progress + cancel ─────────────────────────────────────
+    //
+    // Each long-running file op asks for a Cancellable via `op_start`, updates
+    // the banner label as it goes via `op_update`, and calls `op_finish` when
+    // done (success or error). The banner's Cancel button cancels every
+    // currently-active op via `cancel_all_ops`.
+
+    pub fn op_start(&self, label: &str) -> gio::Cancellable {
+        let imp = self.imp();
+        let c = gio::Cancellable::new();
+        imp.op_cancellables.borrow_mut().push(c.clone());
+        imp.op_banner.set_title(label);
+        imp.op_banner.set_revealed(true);
+        c
+    }
+
+    pub fn op_update(&self, label: &str) {
+        let imp = self.imp();
+        if !imp.op_cancellables.borrow().is_empty() {
+            imp.op_banner.set_title(label);
+        }
+    }
+
+    pub fn op_finish(&self, c: &gio::Cancellable) {
+        let imp = self.imp();
+        let mut active = imp.op_cancellables.borrow_mut();
+        active.retain(|x| x != c);
+        if active.is_empty() {
+            imp.op_banner.set_revealed(false);
+        } else {
+            imp.op_banner
+                .set_title(&format!("{} operations in progress", active.len()));
+        }
+    }
+
+    pub fn cancel_all_ops(&self) {
+        for c in self.imp().op_cancellables.borrow().iter() {
+            c.cancel();
+        }
+    }
+
     // ── About ────────────────────────────────────────────────────────────────
 
     pub fn show_about(&self) {
@@ -2007,16 +2110,30 @@ impl WrenWindow {
                 }
             };
             let dest_file = gio::File::for_path(&dest_path);
+            let display_name = file
+                .basename()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let cancellable = self.op_start(&format!("Duplicating {display_name}"));
             glib::spawn_future_local(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
+                #[strong]
+                cancellable,
                 async move {
                     log_op("duplicate", &file, Some(&dest_file));
-                    if let Err(e) = copy_recursive(file.clone(), dest_file.clone()).await {
-                        log_err("duplicate", &file, Some(&dest_file), &e);
-                        window.show_toast(&format!("Could not duplicate: {e}"));
-                    } else {
-                        window.reload();
+                    match copy_recursive(file.clone(), dest_file.clone(), &cancellable).await {
+                        Ok(()) => {
+                            window.op_finish(&cancellable);
+                            window.reload();
+                        }
+                        Err(e) => {
+                            window.op_finish(&cancellable);
+                            if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                log_err("duplicate", &file, Some(&dest_file), &e);
+                                window.show_toast(&format!("Could not duplicate: {e}"));
+                            }
+                        }
                     }
                 }
             ));
@@ -2034,31 +2151,52 @@ impl WrenWindow {
                 None => return,
             }
         };
+        let action_label = if is_move { "Moving" } else { "Copying" };
+        let total = files.len();
+        let cancellable = self.op_start(&format!(
+            "{action_label} {total} item{}",
+            if total == 1 { "" } else { "s" }
+        ));
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
+            #[strong]
+            cancellable,
             async move {
-                for file in &files {
+                for (idx, file) in files.iter().enumerate() {
+                    if cancellable.is_cancelled() {
+                        break;
+                    }
                     let Some(name) = file.basename() else { continue };
                     // Dropping a file onto its own parent dir is a no-op.
                     if dest_dir.child(&name).equal(file) { continue; }
                     let dest = unique_dest(&dest_dir, &name);
                     let action = if is_move { "drop-move" } else { "drop-copy" };
                     log_op(action, file, Some(&dest));
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone()).await {
-                        log_err(action, file, Some(&dest), &e);
-                        window.show_toast(&format!("Could not copy: {e}"));
-                        return;
+                    window.op_update(&format!(
+                        "{action_label} {} ({} of {total})",
+                        name.to_string_lossy(),
+                        idx + 1
+                    ));
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &cancellable).await {
+                        if !e.matches(gio::IOErrorEnum::Cancelled) {
+                            log_err(action, file, Some(&dest), &e);
+                            window.show_toast(&format!("Could not copy: {e}"));
+                        }
+                        break;
                     }
                     if is_move {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone()).await {
-                            log_err("delete (post-move)", file, None, &e);
-                            window.show_toast(&format!("Could not remove source: {e}"));
-                            return;
+                        if let Err(e) = delete_recursive(file.clone(), &cancellable).await {
+                            if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                log_err("delete (post-move)", file, None, &e);
+                                window.show_toast(&format!("Could not remove source: {e}"));
+                            }
+                            break;
                         }
                     }
                 }
+                window.op_finish(&cancellable);
                 window.reload();
             }
         ));
@@ -2268,7 +2406,19 @@ fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> gio::File {
     }
 }
 
-async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Error> {
+fn cancelled_err() -> glib::Error {
+    glib::Error::new(gio::IOErrorEnum::Cancelled, "Operation cancelled")
+}
+
+async fn copy_recursive(
+    src: gio::File,
+    dest: gio::File,
+    cancellable: &gio::Cancellable,
+) -> Result<(), glib::Error> {
+    if cancellable.is_cancelled() {
+        return Err(cancelled_err());
+    }
+
     // Check whether the top-level source is a directory.
     let src_info = src
         .query_info_future(
@@ -2293,6 +2443,9 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
     queue.push_back((src, dest));
 
     while let Some((src_dir, dest_dir)) = queue.pop_front() {
+        if cancellable.is_cancelled() {
+            return Err(cancelled_err());
+        }
         let enumerator = src_dir
             .enumerate_children_future(
                 "standard::name,standard::type",
@@ -2302,6 +2455,9 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
             .await?;
 
         loop {
+            if cancellable.is_cancelled() {
+                return Err(cancelled_err());
+            }
             let batch = enumerator
                 .next_files_future(30, glib::Priority::DEFAULT)
                 .await?;
@@ -2309,6 +2465,9 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
                 break;
             }
             for child_info in batch {
+                if cancellable.is_cancelled() {
+                    return Err(cancelled_err());
+                }
                 let name = child_info.name();
                 let child_src = src_dir.child(&name);
                 let child_dest = dest_dir.child(&name);
@@ -2329,7 +2488,13 @@ async fn copy_recursive(src: gio::File, dest: gio::File) -> Result<(), glib::Err
     Ok(())
 }
 
-async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
+async fn delete_recursive(
+    file: gio::File,
+    cancellable: &gio::Cancellable,
+) -> Result<(), glib::Error> {
+    if cancellable.is_cancelled() {
+        return Err(cancelled_err());
+    }
     let info = file
         .query_info_future(
             "standard::type",
@@ -2348,6 +2513,9 @@ async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
     let mut stack = vec![file];
 
     while let Some(dir) = stack.pop() {
+        if cancellable.is_cancelled() {
+            return Err(cancelled_err());
+        }
         let enumerator = dir
             .enumerate_children_future(
                 "standard::name,standard::type",
@@ -2359,6 +2527,9 @@ async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
         dirs.push(dir.clone());
 
         loop {
+            if cancellable.is_cancelled() {
+                return Err(cancelled_err());
+            }
             let batch = enumerator
                 .next_files_future(30, glib::Priority::DEFAULT)
                 .await?;
@@ -2366,6 +2537,9 @@ async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
                 break;
             }
             for child_info in batch {
+                if cancellable.is_cancelled() {
+                    return Err(cancelled_err());
+                }
                 let child = dir.child(child_info.name());
                 if child_info.file_type() == gio::FileType::Directory {
                     stack.push(child);
@@ -2378,6 +2552,9 @@ async fn delete_recursive(file: gio::File) -> Result<(), glib::Error> {
 
     // Delete directories deepest-first.
     for dir in dirs.into_iter().rev() {
+        if cancellable.is_cancelled() {
+            return Err(cancelled_err());
+        }
         dir.delete_future(glib::Priority::DEFAULT).await?;
     }
     Ok(())

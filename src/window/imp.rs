@@ -43,6 +43,8 @@ pub struct WrenWindow {
     pub view_button: TemplateChild<gtk4::MenuButton>,
     #[template_child]
     pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
+    #[template_child]
+    pub op_banner: TemplateChild<adw::Banner>,
 
     pub tabs: RefCell<Vec<TabState>>,
     pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
@@ -52,6 +54,7 @@ pub struct WrenWindow {
     pub zoom_adjustment: gtk4::Adjustment,
     pub undo_stack: RefCell<Vec<UndoOp>>,
     pub redo_stack: RefCell<Vec<UndoOp>>,
+    pub op_cancellables: RefCell<Vec<gio::Cancellable>>,
 }
 
 impl Default for WrenWindow {
@@ -72,6 +75,7 @@ impl Default for WrenWindow {
             menu_button: Default::default(),
             view_button: Default::default(),
             breadcrumb_bar: Default::default(),
+            op_banner: Default::default(),
             tabs: Default::default(),
             clipboard_files: Default::default(),
             show_hidden: Default::default(),
@@ -80,6 +84,7 @@ impl Default for WrenWindow {
             zoom_adjustment: gtk4::Adjustment::new(3.0, 1.0, 5.0, 1.0, 1.0, 0.0),
             undo_stack: Default::default(),
             redo_stack: Default::default(),
+            op_cancellables: Default::default(),
         }
     }
 }
@@ -523,6 +528,15 @@ impl ObjectImpl for WrenWindow {
             obj.imp().zoom_level.set(zl);
             obj.imp().zoom_adjustment.set_value(zl as f64);
         }
+
+        // Op banner Cancel button → cancel every running file operation.
+        obj.imp().op_banner.connect_button_clicked(glib::clone!(
+            #[weak]
+            obj,
+            move |_| {
+                obj.cancel_all_ops();
+            }
+        ));
 
         // Sidebar toggle button — keep split_view and button in sync
         obj.imp().sidebar_button.connect_toggled(glib::clone!(
