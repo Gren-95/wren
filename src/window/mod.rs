@@ -1122,9 +1122,12 @@ impl WrenWindow {
                         #[weak] window,
                         #[strong] handle,
                         async move {
-                            // Enumerate trash:/// once to gather every top-level
-                            // item, then delete each (with the existing recursive
-                            // helper) so progress updates keep flowing.
+                            // Enumerate trash:/// to gather every top-level item.
+                            // The trash backend rejects writes to anything inside
+                            // a trashed directory ("Items in the trash may not be
+                            // modified"), so we DELETE EACH TOP-LEVEL ITEM atomically
+                            // via delete_future — gvfs handles the recursion under
+                            // the hood. Don't call delete_recursive here.
                             let mut to_delete: Vec<gio::File> = Vec::new();
                             if let Ok(en) = trash
                                 .enumerate_children_future(
@@ -1145,17 +1148,8 @@ impl WrenWindow {
                                 }
                             }
 
-                            let mut total_items: u64 = 0;
-                            let mut total_bytes: u64 = 0;
-                            for f in &to_delete {
-                                if handle.cancellable.is_cancelled() { break; }
-                                let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
-                                total_items += n;
-                                total_bytes += b;
-                            }
-                            handle.set_total(total_items, total_bytes);
-
                             let total = to_delete.len();
+                            handle.set_total(total as u64, 0);
                             for (idx, f) in to_delete.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() { break; }
                                 log_op("empty trash", f, None);
@@ -1169,7 +1163,9 @@ impl WrenWindow {
                                     f.clone(),
                                     &handle.cancellable,
                                     handle.delete_callback(),
-                                ).await {
+                                )
+                                .await
+                                {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("empty trash", f, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
@@ -3453,6 +3449,14 @@ async fn delete_recursive(
 ) -> Result<(), glib::Error> {
     if cancellable.is_cancelled() {
         return Err(cancelled_err());
+    }
+    // The gvfs trash backend rejects any write inside a trashed item with
+    // "Items in the trash may not be modified" — so we can't enumerate +
+    // delete child-by-child. delete_future on a trash:/// top-level entry
+    // IS supported and recursively removes the trashed item atomically.
+    if file.has_uri_scheme("trash") {
+        on_item(&file, 0);
+        return file.delete_future(glib::Priority::DEFAULT).await;
     }
     let info = file
         .query_info_future(
