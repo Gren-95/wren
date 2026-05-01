@@ -154,6 +154,12 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action("win.delete-permanently", None, |win, _, _| {
             win.delete_permanently();
         });
+        klass.install_action("win.empty-trash", None, |win, _, _| {
+            win.empty_trash();
+        });
+        klass.install_action("win.restore-from-trash", None, |win, _, _| {
+            win.restore_from_trash();
+        });
         klass.install_action("win.copy", None, |win, _, _| {
             win.copy_selection();
         });

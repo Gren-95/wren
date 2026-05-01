@@ -749,6 +749,11 @@ impl WrenWindow {
         file_section.append(Some("Move to Trash"), Some("win.move-to-trash"));
         menu.append_section(None, &file_section);
 
+        let trash_section = gio::Menu::new();
+        trash_section.append(Some("Restore From Trash"), Some("win.restore-from-trash"));
+        trash_section.append(Some("Empty Trash"), Some("win.empty-trash"));
+        menu.append_section(None, &trash_section);
+
         let info_section = gio::Menu::new();
         info_section.append(Some("Properties"), Some("win.properties"));
         menu.append_section(None, &info_section);
@@ -1091,6 +1096,190 @@ impl WrenWindow {
             ),
         );
         confirm.present(Some(self));
+    }
+
+    /// Permanently delete every item in `trash:///` after confirmation.
+    pub fn empty_trash(&self) {
+        let dialog = adw::AlertDialog::new(
+            Some("Empty Trash?"),
+            Some("All items in the Trash will be permanently deleted. This cannot be undone."),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("empty", "Empty Trash");
+        dialog.set_response_appearance("empty", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| {
+                    if response != "empty" { return; }
+                    let trash = gio::File::for_uri("trash:///");
+                    let handle = window.op_start(OpKind::Delete);
+                    glib::spawn_future_local(glib::clone!(
+                        #[weak] window,
+                        #[strong] handle,
+                        async move {
+                            // Enumerate trash:/// once to gather every top-level
+                            // item, then delete each (with the existing recursive
+                            // helper) so progress updates keep flowing.
+                            let mut to_delete: Vec<gio::File> = Vec::new();
+                            if let Ok(en) = trash
+                                .enumerate_children_future(
+                                    "standard::name",
+                                    gio::FileQueryInfoFlags::NONE,
+                                    glib::Priority::DEFAULT,
+                                )
+                                .await
+                            {
+                                while let Ok(batch) = en
+                                    .next_files_future(50, glib::Priority::DEFAULT)
+                                    .await
+                                {
+                                    if batch.is_empty() { break; }
+                                    for info in batch {
+                                        to_delete.push(trash.child(info.name()));
+                                    }
+                                }
+                            }
+
+                            let mut total_items: u64 = 0;
+                            let mut total_bytes: u64 = 0;
+                            for f in &to_delete {
+                                if handle.cancellable.is_cancelled() { break; }
+                                let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
+                                total_items += n;
+                                total_bytes += b;
+                            }
+                            handle.set_total(total_items, total_bytes);
+
+                            let total = to_delete.len();
+                            for (idx, f) in to_delete.iter().enumerate() {
+                                if handle.cancellable.is_cancelled() { break; }
+                                log_op("empty trash", f, None);
+                                let name = f
+                                    .basename()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                                handle.set_paths(f, None);
+                                if let Err(e) = delete_recursive(
+                                    f.clone(),
+                                    &handle.cancellable,
+                                    handle.delete_callback(),
+                                ).await {
+                                    if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                        log_err("empty trash", f, None, &e);
+                                        window.show_toast(&format!("Could not delete: {e}"));
+                                    }
+                                    break;
+                                }
+                            }
+                            handle.set_fraction(1.0);
+                            window.op_finish(&handle);
+                            window.reload();
+                        }
+                    ));
+                }
+            ),
+        );
+        dialog.present(Some(self));
+    }
+
+    /// Restore selected trash items to their original locations using the
+    /// `trash::orig-path` xattr the trash backend records on each entry.
+    pub fn restore_from_trash(&self) {
+        let files = self.selected_files();
+        if files.is_empty() { return; }
+        let handle = self.op_start(OpKind::Move);
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)] self,
+            #[strong] handle,
+            async move {
+                let mut total_items: u64 = 0;
+                let mut total_bytes: u64 = 0;
+                for f in &files {
+                    if handle.cancellable.is_cancelled() { break; }
+                    let (n, b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
+                    // Restore is copy + delete, so totals double.
+                    total_items += n * 2;
+                    total_bytes += b * 2;
+                }
+                handle.set_total(total_items, total_bytes);
+
+                let total = files.len();
+                for (idx, file) in files.iter().enumerate() {
+                    if handle.cancellable.is_cancelled() { break; }
+                    let info = match file
+                        .query_info_future(
+                            "trash::orig-path",
+                            gio::FileQueryInfoFlags::NONE,
+                            glib::Priority::DEFAULT,
+                        )
+                        .await
+                    {
+                        Ok(i) => i,
+                        Err(e) => {
+                            window.show_toast(&format!("Cannot restore: {e}"));
+                            continue;
+                        }
+                    };
+                    let Some(orig_path) = info.attribute_byte_string("trash::orig-path") else {
+                        window.show_toast("Original path unknown for this trash item");
+                        continue;
+                    };
+                    let dest = gio::File::for_path(std::path::Path::new(
+                        std::str::from_utf8(orig_path.as_ref()).unwrap_or_default(),
+                    ));
+                    let name = file
+                        .basename()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                    handle.set_paths(file, Some(&dest));
+                    log_op("restore", file, Some(&dest));
+
+                    if dest.query_exists(gio::Cancellable::NONE) {
+                        window.show_toast(&format!(
+                            "Cannot restore {name}: destination already exists"
+                        ));
+                        continue;
+                    }
+                    if let Err(e) = copy_recursive(
+                        file.clone(),
+                        dest.clone(),
+                        &handle.cancellable,
+                        handle.copy_callback(),
+                    )
+                    .await
+                    {
+                        if !e.matches(gio::IOErrorEnum::Cancelled) {
+                            log_err("restore (copy)", file, Some(&dest), &e);
+                            window.show_toast(&format!("Could not restore: {e}"));
+                        }
+                        break;
+                    }
+                    if let Err(e) = delete_recursive(
+                        file.clone(),
+                        &handle.cancellable,
+                        handle.delete_callback(),
+                    )
+                    .await
+                    {
+                        if !e.matches(gio::IOErrorEnum::Cancelled) {
+                            log_err("restore (delete)", file, None, &e);
+                            window.show_toast(&format!("Restored, but trash entry remains: {e}"));
+                        }
+                        break;
+                    }
+                }
+                handle.set_fraction(1.0);
+                window.op_finish(&handle);
+                window.reload();
+            }
+        ));
     }
 
     /// Trash a specific list of files (used by sidebar drop on Trash).
@@ -2153,7 +2342,21 @@ impl WrenWindow {
         }
         let has_clipboard = self.imp().clipboard_files.borrow().is_some();
         self.action_set_enabled("win.paste", has_clipboard);
+        // Restore is only meaningful when in trash:/// AND something is
+        // selected; Empty Trash needs only the trash location.
+        let in_trash = self.current_location_is_trash();
+        self.action_set_enabled("win.restore-from-trash", in_trash && has_selection);
+        self.action_set_enabled("win.empty-trash", in_trash);
         self.update_status_bar();
+    }
+
+    fn current_location_is_trash(&self) -> bool {
+        let Some(idx) = self.current_tab_index() else { return false };
+        let tabs = self.imp().tabs.borrow();
+        tabs.get(idx)
+            .and_then(|t| t.navigation.current().cloned())
+            .map(|f| f.has_uri_scheme("trash"))
+            .unwrap_or(false)
     }
 
     fn update_status_bar(&self) {
