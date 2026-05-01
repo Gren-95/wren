@@ -1156,7 +1156,7 @@ impl WrenWindow {
                                 handle.set_item(&format!("{name} ({} of {total})", idx + 1));
                                 handle.set_fraction(idx as f64 / total as f64);
                                 handle.set_paths(f, None);
-                                if let Err(e) = delete_recursive(f.clone(), &handle.cancellable).await {
+                                if let Err(e) = delete_recursive(f.clone(), &handle.cancellable, handle.delete_callback()).await {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete (trash unsupported)", f, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
@@ -1224,7 +1224,7 @@ impl WrenWindow {
                                 handle.set_item(&format!("{name} ({} of {total})", idx + 1));
                                 handle.set_fraction(idx as f64 / total as f64);
                                 handle.set_paths(file, None);
-                                if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
+                                if let Err(e) = delete_recursive(file.clone(), &handle.cancellable, handle.delete_callback()).await {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete", file, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
@@ -1348,7 +1348,7 @@ impl WrenWindow {
                         ConflictResolution::Skip => continue,
                         ConflictResolution::Cancel => break,
                         ConflictResolution::Replace => {
-                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable).await {
+                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable, handle.delete_callback()).await {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
@@ -1361,7 +1361,7 @@ impl WrenWindow {
                     };
                     log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable).await {
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable, handle.copy_callback()).await {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not paste: {e}"));
@@ -1370,7 +1370,7 @@ impl WrenWindow {
                     }
                     if is_cut {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
+                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable, handle.delete_callback()).await {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not move: {e}"));
@@ -2215,7 +2215,7 @@ impl WrenWindow {
                 handle,
                 async move {
                     log_op("duplicate", &file, Some(&dest_file));
-                    match copy_recursive(file.clone(), dest_file.clone(), &handle.cancellable).await {
+                    match copy_recursive(file.clone(), dest_file.clone(), &handle.cancellable, handle.copy_callback()).await {
                         Ok(()) => {
                             handle.set_fraction(1.0);
                             window.op_finish(&handle);
@@ -2289,7 +2289,7 @@ impl WrenWindow {
                         ConflictResolution::Skip => continue,
                         ConflictResolution::Cancel => break,
                         ConflictResolution::Replace => {
-                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable).await {
+                            if let Err(e) = delete_recursive(dest_initial.clone(), &handle.cancellable, handle.delete_callback()).await {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
@@ -2302,7 +2302,7 @@ impl WrenWindow {
                     };
                     log_op(action, file, Some(&dest));
 
-                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable).await {
+                    if let Err(e) = copy_recursive(file.clone(), dest.clone(), &handle.cancellable, handle.copy_callback()).await {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not copy: {e}"));
@@ -2311,7 +2311,7 @@ impl WrenWindow {
                     }
                     if is_move {
                         log_op("delete (post-move)", file, None);
-                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
+                        if let Err(e) = delete_recursive(file.clone(), &handle.cancellable, handle.delete_callback()).await {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not remove source: {e}"));
@@ -2655,12 +2655,43 @@ impl OpHandle {
         self.progress.set_fraction(f);
         self.progress.set_text(Some(&format!("{}%", (f * 100.0).round() as u32)));
     }
+
+    /// Build a per-sub-item progress callback for `copy_recursive`. Updates
+    /// the expanded path labels for every file inside a recursive copy,
+    /// throttled to ~25 updates/sec so a 10k-file folder doesn't melt GTK.
+    pub fn copy_callback(&self) -> impl Fn(&gio::File, &gio::File) + 'static {
+        let h = self.clone();
+        let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+        move |s, d| {
+            let now = std::time::Instant::now();
+            if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
+                return;
+            }
+            last.set(now);
+            h.set_paths(s, Some(d));
+        }
+    }
+
+    /// Build a per-sub-item progress callback for `delete_recursive`.
+    pub fn delete_callback(&self) -> impl Fn(&gio::File) + 'static {
+        let h = self.clone();
+        let last = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+        move |s| {
+            let now = std::time::Instant::now();
+            if now.duration_since(last.get()) < std::time::Duration::from_millis(40) {
+                return;
+            }
+            last.set(now);
+            h.set_paths(s, None);
+        }
+    }
 }
 
 async fn copy_recursive(
     src: gio::File,
     dest: gio::File,
     cancellable: &gio::Cancellable,
+    on_item: impl Fn(&gio::File, &gio::File) + 'static,
 ) -> Result<(), glib::Error> {
     if cancellable.is_cancelled() {
         return Err(cancelled_err());
@@ -2676,6 +2707,7 @@ async fn copy_recursive(
         .await?;
 
     if src_info.file_type() != gio::FileType::Directory {
+        on_item(&src, &dest);
         let (fut, _) = src.copy_future(
             &dest,
             gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
@@ -2684,6 +2716,7 @@ async fn copy_recursive(
         return fut.await;
     }
 
+    on_item(&src, &dest);
     // BFS queue of (src_dir, dest_dir) pairs.
     dest.make_directory_future(glib::Priority::DEFAULT).await?;
     let mut queue = std::collections::VecDeque::new();
@@ -2718,6 +2751,7 @@ async fn copy_recursive(
                 let name = child_info.name();
                 let child_src = src_dir.child(&name);
                 let child_dest = dest_dir.child(&name);
+                on_item(&child_src, &child_dest);
                 if child_info.file_type() == gio::FileType::Directory {
                     child_dest.make_directory_future(glib::Priority::DEFAULT).await?;
                     queue.push_back((child_src, child_dest));
@@ -2738,6 +2772,7 @@ async fn copy_recursive(
 async fn delete_recursive(
     file: gio::File,
     cancellable: &gio::Cancellable,
+    on_item: impl Fn(&gio::File) + 'static,
 ) -> Result<(), glib::Error> {
     if cancellable.is_cancelled() {
         return Err(cancelled_err());
@@ -2751,6 +2786,7 @@ async fn delete_recursive(
         .await?;
 
     if info.file_type() != gio::FileType::Directory {
+        on_item(&file);
         return file.delete_future(glib::Priority::DEFAULT).await;
     }
 
@@ -2788,6 +2824,7 @@ async fn delete_recursive(
                     return Err(cancelled_err());
                 }
                 let child = dir.child(child_info.name());
+                on_item(&child);
                 if child_info.file_type() == gio::FileType::Directory {
                     stack.push(child);
                 } else {
@@ -2802,6 +2839,7 @@ async fn delete_recursive(
         if cancellable.is_cancelled() {
             return Err(cancelled_err());
         }
+        on_item(&dir);
         dir.delete_future(glib::Priority::DEFAULT).await?;
     }
     Ok(())
