@@ -169,12 +169,18 @@ impl WrenBreadcrumbBar {
 
     pub fn enter_edit_mode(&self) {
         let imp = self.imp();
+        // Prefer the local path; for virtual filesystems (trash:///, recent:///,
+        // sftp://…) f.path() is None — fall back to the full URI so the user
+        // can see and copy the location.
         let path_text = imp
             .current_location
             .borrow()
             .as_ref()
-            .and_then(|f| f.path())
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|f| {
+                f.path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| f.uri().to_string())
+            })
             .unwrap_or_default();
         imp.path_entry.set_text(&path_text);
         imp.mode_stack.set_visible_child_name("entry");

@@ -2342,11 +2342,12 @@ impl WrenWindow {
         }
         let has_clipboard = self.imp().clipboard_files.borrow().is_some();
         self.action_set_enabled("win.paste", has_clipboard);
-        // Restore is only meaningful when in trash:/// AND something is
-        // selected; Empty Trash needs only the trash location.
+        // Restore needs in-trash AND a selection; Empty Trash is always
+        // available — it lives in the hamburger menu and the sidebar Trash
+        // row, with its own confirmation dialog before doing anything.
         let in_trash = self.current_location_is_trash();
         self.action_set_enabled("win.restore-from-trash", in_trash && has_selection);
-        self.action_set_enabled("win.empty-trash", in_trash);
+        self.action_set_enabled("win.empty-trash", true);
         self.update_status_bar();
     }
 
@@ -2717,6 +2718,30 @@ impl WrenWindow {
         if let Some(app) = self.application().and_downcast::<WrenApplication>() {
             WrenWindow::new(&app).present();
         }
+    }
+
+    /// Open a new top-level window already navigated to `uri`. Used by
+    /// "Open in New Window" in the sidebar context menu.
+    pub fn open_window_at(&self, uri: &str) {
+        let Some(app) = self.application().and_downcast::<WrenApplication>() else {
+            return;
+        };
+        let win = WrenWindow::new(&app);
+        win.present();
+        win.navigate_to(gio::File::for_uri(uri));
+    }
+
+    /// Copy a sidebar place's URI / local path to the clipboard. For local
+    /// places, copies the path; for virtual ones (trash:///, recent:///,
+    /// sftp://…), copies the URI.
+    pub fn copy_path_at(&self, uri: &str) {
+        let file = gio::File::for_uri(uri);
+        let text = file
+            .path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| uri.to_string());
+        self.clipboard().set_text(&text);
+        self.show_toast("Location copied");
     }
 
     pub fn copy_path(&self) {

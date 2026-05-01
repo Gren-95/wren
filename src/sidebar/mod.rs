@@ -181,29 +181,36 @@ impl WrenSidebar {
     fn attach_sidebar_context_menu(row: &gtk4::ListBoxRow, uri: &str, is_bookmark: bool) {
         let menu = gio::Menu::new();
 
+        // Helper: parameterised menu item with a string target.
+        fn item_for(label: &str, action: &str, target: &str) -> gio::MenuItem {
+            let it = gio::MenuItem::new(Some(label), None);
+            it.set_action_and_target_value(Some(action), Some(&target.to_variant()));
+            it
+        }
+
         let open_section = gio::Menu::new();
-        let tab_item = gio::MenuItem::new(Some("Open in New Tab"), None);
-        tab_item.set_action_and_target_value(
-            Some("win.open-tab-at"),
-            Some(&uri.to_variant()),
-        );
-        open_section.append_item(&tab_item);
-        let term_item = gio::MenuItem::new(Some("Open in Terminal"), None);
-        term_item.set_action_and_target_value(
-            Some("win.open-terminal-at"),
-            Some(&uri.to_variant()),
-        );
-        open_section.append_item(&term_item);
+        open_section.append_item(&item_for("Open in New Tab", "win.open-tab-at", uri));
+        open_section.append_item(&item_for("Open in New Window", "win.open-window-at", uri));
+        // Terminal only makes sense for local locations; trash:/// /
+        // recent:/// have no path so the action would fail silently.
+        if !uri.starts_with("trash://") && !uri.starts_with("recent://") {
+            open_section.append_item(&item_for("Open in Terminal", "win.open-terminal-at", uri));
+        }
         menu.append_section(None, &open_section);
+
+        let info_section = gio::Menu::new();
+        info_section.append_item(&item_for("Copy Location", "win.copy-path-at", uri));
+        menu.append_section(None, &info_section);
+
+        if uri == "trash:///" {
+            let trash_section = gio::Menu::new();
+            trash_section.append(Some("Empty Trash"), Some("win.empty-trash"));
+            menu.append_section(None, &trash_section);
+        }
 
         if is_bookmark {
             let bm_section = gio::Menu::new();
-            let remove_item = gio::MenuItem::new(Some("Remove Bookmark"), None);
-            remove_item.set_action_and_target_value(
-                Some("win.remove-bookmark"),
-                Some(&uri.to_variant()),
-            );
-            bm_section.append_item(&remove_item);
+            bm_section.append_item(&item_for("Remove Bookmark", "win.remove-bookmark", uri));
             menu.append_section(None, &bm_section);
         }
 

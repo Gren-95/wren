@@ -160,6 +160,24 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action("win.restore-from-trash", None, |win, _, _| {
             win.restore_from_trash();
         });
+        klass.install_action(
+            "win.open-window-at",
+            Some(glib::VariantTy::STRING),
+            |win, _, param| {
+                if let Some(uri) = param.and_then(|v| v.str()) {
+                    win.open_window_at(uri);
+                }
+            },
+        );
+        klass.install_action(
+            "win.copy-path-at",
+            Some(glib::VariantTy::STRING),
+            |win, _, param| {
+                if let Some(uri) = param.and_then(|v| v.str()) {
+                    win.copy_path_at(uri);
+                }
+            },
+        );
         klass.install_action("win.copy", None, |win, _, _| {
             win.copy_selection();
         });
@@ -456,6 +474,10 @@ impl ObjectImpl for WrenWindow {
         edit_section.append(Some("Undo"), Some("win.undo"));
         edit_section.append(Some("Redo"), Some("win.redo"));
         hamburger.append_section(None, &edit_section);
+
+        let trash_section = gio::Menu::new();
+        trash_section.append(Some("Empty Trash"), Some("win.empty-trash"));
+        hamburger.append_section(None, &trash_section);
 
         let settings_section = gio::Menu::new();
         settings_section.append(Some("Settings…"), Some("win.open-settings"));
