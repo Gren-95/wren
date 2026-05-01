@@ -2680,6 +2680,11 @@ fn make_path_row(prefix: &str) -> (gtk4::Box, gtk4::Label) {
     value.set_xalign(0.0);
     value.set_hexpand(true);
     value.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+    // Both width-chars and max-width-chars set to lock the natural width.
+    // Without this, GtkLabel's natural size grows with its content and the
+    // popover keeps resizing every time the path updates.
+    value.set_width_chars(40);
+    value.set_max_width_chars(40);
     value.add_css_class("caption");
     value.add_css_class("monospace");
     value.set_selectable(true);
@@ -2727,6 +2732,7 @@ impl OpHandle {
         let title_label = gtk4::Label::new(Some(title));
         title_label.set_xalign(0.0);
         title_label.set_hexpand(true);
+        title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         title_label.add_css_class("heading");
         let cancel_btn = gtk4::Button::from_icon_name("window-close-symbolic");
         cancel_btn.set_tooltip_text(Some("Cancel"));
@@ -2742,6 +2748,8 @@ impl OpHandle {
         item_label.set_xalign(0.0);
         item_label.set_hexpand(true);
         item_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        item_label.set_width_chars(40);
+        item_label.set_max_width_chars(40);
 
         // ── Progress bar with overlay percent ───────────────────────────────
         let progress = gtk4::ProgressBar::new();
