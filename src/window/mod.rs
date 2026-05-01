@@ -1117,10 +1117,8 @@ impl WrenWindow {
                 move |_, response| {
                     if response != "empty" { return; }
                     let trash = gio::File::for_uri("trash:///");
-                    let handle = window.op_start(OpKind::Delete);
                     glib::spawn_future_local(glib::clone!(
                         #[weak] window,
-                        #[strong] handle,
                         async move {
                             // Enumerate trash:/// to gather every top-level item.
                             // The trash backend rejects writes to anything inside
@@ -1148,7 +1146,14 @@ impl WrenWindow {
                                 }
                             }
 
+                            // Empty trash → just toast, don't open the popover.
+                            if to_delete.is_empty() {
+                                window.show_toast("Trash is already empty");
+                                return;
+                            }
+
                             let total = to_delete.len();
+                            let handle = window.op_start(OpKind::Delete);
                             handle.set_total(total as u64, 0);
                             // For trash entries, delete_future returns in ~ms,
                             // so a 1000-item empty would whip the labels through
@@ -1159,8 +1164,9 @@ impl WrenWindow {
                             let mut last_ui = std::time::Instant::now()
                                 .checked_sub(std::time::Duration::from_secs(1))
                                 .unwrap_or_else(std::time::Instant::now);
+                            let succeeded = 'op: {
                             for (idx, f) in to_delete.iter().enumerate() {
-                                if handle.cancellable.is_cancelled() { break; }
+                                if handle.cancellable.is_cancelled() { break 'op false; }
                                 log_op("empty trash", f, None);
                                 let now = std::time::Instant::now();
                                 if now.duration_since(last_ui)
@@ -1190,9 +1196,12 @@ impl WrenWindow {
                                         log_err("empty trash", f, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
-                                    break;
+                                    break 'op false;
                                 }
                             }
+                            true
+                            };
+                            if succeeded { handle.mark_succeeded(); }
                             handle.set_fraction(1.0);
                             window.op_finish(&handle);
                             window.reload();
@@ -1209,7 +1218,8 @@ impl WrenWindow {
     pub fn restore_from_trash(&self) {
         let files = self.selected_files();
         if files.is_empty() { return; }
-        let handle = self.op_start(OpKind::Move);
+        let handle = self.op_start(OpKind::Restore);
+        handle.set_item("Counting items…");
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)] self,
             #[strong] handle,
@@ -1226,8 +1236,9 @@ impl WrenWindow {
                 handle.set_total(total_items, total_bytes);
 
                 let total = files.len();
+                let succeeded = 'op: {
                 for (idx, file) in files.iter().enumerate() {
-                    if handle.cancellable.is_cancelled() { break; }
+                    if handle.cancellable.is_cancelled() { break 'op false; }
                     let info = match file
                         .query_info_future(
                             "trash::orig-path",
@@ -1275,7 +1286,7 @@ impl WrenWindow {
                             log_err("restore (copy)", file, Some(&dest), &e);
                             window.show_toast(&format!("Could not restore: {e}"));
                         }
-                        break;
+                        break 'op false;
                     }
                     if let Err(e) = delete_recursive(
                         file.clone(),
@@ -1288,9 +1299,12 @@ impl WrenWindow {
                             log_err("restore (delete)", file, None, &e);
                             window.show_toast(&format!("Restored, but trash entry remains: {e}"));
                         }
-                        break;
+                        break 'op false;
                     }
                 }
+                true
+                };
+                if succeeded { handle.mark_succeeded(); }
                 handle.set_fraction(1.0);
                 window.op_finish(&handle);
                 window.reload();
@@ -1313,20 +1327,71 @@ impl WrenWindow {
     }
 
     async fn do_trash_files(&self, files: Vec<gio::File>) {
+        let total = files.len();
+        let handle = self.op_start(OpKind::Trash);
+        handle.set_item("Counting items…");
+        // Pre-walk only for the count — trash_future doesn't expose progress
+        // bytes, so we drive the bar by item count alone.
+        let mut total_items: u64 = 0;
+        for f in &files {
+            if handle.cancellable.is_cancelled() { break; }
+            let (n, _b) = count_items_and_bytes(f.clone(), &handle.cancellable).await;
+            total_items += n;
+        }
+        handle.set_total(total_items, 0);
+
         let mut not_supported: Vec<gio::File> = Vec::new();
-        for file in &files {
-            log_op("trash", file, None);
-            match file.trash_future(glib::Priority::DEFAULT).await {
-                Ok(()) => {}
-                Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
-                    not_supported.push(file.clone());
+        let mut last_ui = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or_else(std::time::Instant::now);
+        let succeeded = 'op: {
+            for (idx, file) in files.iter().enumerate() {
+                if handle.cancellable.is_cancelled() {
+                    break 'op false;
                 }
-                Err(e) => {
-                    log_err("trash", file, None, &e);
-                    self.show_toast(&format!("Could not trash: {e}"));
+                log_op("trash", file, None);
+                let now = std::time::Instant::now();
+                if now.duration_since(last_ui)
+                    >= std::time::Duration::from_millis(100)
+                    || idx == 0
+                    || idx + 1 == total
+                {
+                    last_ui = now;
+                    let name = file
+                        .basename()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                    handle.set_paths(file, None);
+                }
+                match file.trash_future(glib::Priority::DEFAULT).await {
+                    Ok(()) => {
+                        // Tick the per-item counter so the bar advances. The
+                        // trash backend doesn't tell us how many sub-items it
+                        // moved, so we assume the pre-walked count.
+                        let mut s = handle.state.borrow_mut();
+                        s.items_done = (idx as u64 + 1).min(s.total_items);
+                        drop(s);
+                        if total_items > 0 {
+                            handle.set_fraction((idx + 1) as f64 / total as f64);
+                        }
+                    }
+                    Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
+                        not_supported.push(file.clone());
+                    }
+                    Err(e) => {
+                        log_err("trash", file, None, &e);
+                        self.show_toast(&format!("Could not trash: {e}"));
+                    }
                 }
             }
+            true
+        };
+        if succeeded {
+            handle.mark_succeeded();
         }
+        handle.set_fraction(1.0);
+        self.op_finish(&handle);
         self.reload();
 
         if not_supported.is_empty() {
@@ -1381,9 +1446,10 @@ impl WrenWindow {
                             let mut last_ui = std::time::Instant::now()
                                 .checked_sub(std::time::Duration::from_secs(1))
                                 .unwrap_or_else(std::time::Instant::now);
+                            let succeeded = 'op: {
                             for (idx, f) in to_delete.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
-                                    break;
+                                    break 'op false;
                                 }
                                 log_op("delete (trash unsupported)", f, None);
                                 let now = std::time::Instant::now();
@@ -1411,9 +1477,12 @@ impl WrenWindow {
                                         log_err("delete (trash unsupported)", f, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
-                                    break;
+                                    break 'op false;
                                 }
                             }
+                            true
+                            };
+                            if succeeded { handle.mark_succeeded(); }
                             handle.set_fraction(1.0);
                             window.op_finish(&handle);
                             window.reload();
@@ -1456,6 +1525,7 @@ impl WrenWindow {
                     let files = files_clone.clone();
                     let total = files.len();
                     let handle = window.op_start(OpKind::Delete);
+                    handle.set_item("Counting items…");
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
@@ -1477,9 +1547,10 @@ impl WrenWindow {
                             let mut last_ui = std::time::Instant::now()
                                 .checked_sub(std::time::Duration::from_secs(1))
                                 .unwrap_or_else(std::time::Instant::now);
+                            let succeeded = 'op: {
                             for (idx, file) in files.iter().enumerate() {
                                 if handle.cancellable.is_cancelled() {
-                                    break;
+                                    break 'op false;
                                 }
                                 log_op("delete", file, None);
                                 let now = std::time::Instant::now();
@@ -1507,9 +1578,12 @@ impl WrenWindow {
                                         log_err("delete", file, None, &e);
                                         window.show_toast(&format!("Could not delete: {e}"));
                                     }
-                                    break;
+                                    break 'op false;
                                 }
                             }
+                            true
+                            };
+                            if succeeded { handle.mark_succeeded(); }
                             handle.set_fraction(1.0);
                             window.op_finish(&handle);
                             window.reload();
@@ -1581,6 +1655,7 @@ impl WrenWindow {
         let kind = if is_cut { OpKind::Move } else { OpKind::Copy };
         let total = files.len();
         let handle = self.op_start(kind);
+        handle.set_item("Counting items…");
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -1608,9 +1683,10 @@ impl WrenWindow {
                 handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
+                let succeeded = 'op: {
                 for (idx, file) in files.iter().enumerate() {
                     if handle.cancellable.is_cancelled() {
-                        break;
+                        break 'op false;
                     }
                     let Some(name) = file.basename() else {
                         continue;
@@ -1643,7 +1719,7 @@ impl WrenWindow {
                     };
                     let dest = match resolution {
                         ConflictResolution::Skip => continue,
-                        ConflictResolution::Cancel => break,
+                        ConflictResolution::Cancel => break 'op false,
                         ConflictResolution::Replace => {
                             // Replace's pre-delete: show path activity but
                             // don't tick the main counter (these items aren't
@@ -1673,7 +1749,7 @@ impl WrenWindow {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
                                 }
-                                break;
+                                break 'op false;
                             }
                             dest_initial
                         }
@@ -1693,7 +1769,7 @@ impl WrenWindow {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not paste: {e}"));
                         }
-                        break;
+                        break 'op false;
                     }
                     if is_cut {
                         log_op("delete (post-move)", file, None);
@@ -1708,10 +1784,13 @@ impl WrenWindow {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not move: {e}"));
                             }
-                            break;
+                            break 'op false;
                         }
                     }
                 }
+                true
+                };
+                if succeeded { handle.mark_succeeded(); }
                 handle.set_fraction(1.0);
                 if is_cut {
                     window.imp().clipboard_files.replace(None);
@@ -2450,11 +2529,19 @@ impl WrenWindow {
     pub fn op_finish(&self, handle: &OpHandle) {
         let imp = self.imp();
         // System notification for long, successful ops so the user knows
-        // they can come back to the app — only worth it if the op took at
-        // least 30 s of wall time and wasn't cancelled.
-        let elapsed = handle.state.borrow().start.elapsed();
+        // they can come back to the app — only worth it if the op fully
+        // completed (mark_succeeded was called), wasn't cancelled, and ran
+        // for at least 30 s of wall time. Errored ops would otherwise
+        // contradict their toast with a "Copy complete" notification.
+        let (elapsed, succeeded) = {
+            let s = handle.state.borrow();
+            (s.start.elapsed(), s.succeeded)
+        };
         let was_cancelled = handle.cancellable.is_cancelled();
-        if !was_cancelled && elapsed >= std::time::Duration::from_secs(30) {
+        if succeeded
+            && !was_cancelled
+            && elapsed >= std::time::Duration::from_secs(30)
+        {
             if let Some(app) = self.application() {
                 let notif = gio::Notification::new(handle.kind.done_title());
                 notif.set_body(Some(&format!(
@@ -2590,6 +2677,7 @@ impl WrenWindow {
                     .await
                     {
                         Ok(()) => {
+                            handle.mark_succeeded();
                             handle.set_fraction(1.0);
                             window.op_finish(&handle);
                             window.reload();
@@ -2621,6 +2709,7 @@ impl WrenWindow {
         let kind = if is_move { OpKind::Move } else { OpKind::Copy };
         let total = files.len();
         let handle = self.op_start(kind);
+        handle.set_item("Counting items…");
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -2645,9 +2734,10 @@ impl WrenWindow {
                 handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
+                let succeeded = 'op: {
                 for (idx, file) in files.iter().enumerate() {
                     if handle.cancellable.is_cancelled() {
-                        break;
+                        break 'op false;
                     }
                     let Some(name) = file.basename() else { continue };
                     // Dropping a file onto its own parent dir is a no-op.
@@ -2676,7 +2766,7 @@ impl WrenWindow {
                     };
                     let dest = match resolution {
                         ConflictResolution::Skip => continue,
-                        ConflictResolution::Cancel => break,
+                        ConflictResolution::Cancel => break 'op false,
                         ConflictResolution::Replace => {
                             // Replace's pre-delete: show path activity but
                             // don't tick the main counter (these items aren't
@@ -2706,7 +2796,7 @@ impl WrenWindow {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
                                     window.show_toast(&format!("Could not replace: {e}"));
                                 }
-                                break;
+                                break 'op false;
                             }
                             dest_initial
                         }
@@ -2726,7 +2816,7 @@ impl WrenWindow {
                             log_err(action, file, Some(&dest), &e);
                             window.show_toast(&format!("Could not copy: {e}"));
                         }
-                        break;
+                        break 'op false;
                     }
                     if is_move {
                         log_op("delete (post-move)", file, None);
@@ -2741,10 +2831,13 @@ impl WrenWindow {
                                 log_err("delete (post-move)", file, None, &e);
                                 window.show_toast(&format!("Could not remove source: {e}"));
                             }
-                            break;
+                            break 'op false;
                         }
                     }
                 }
+                true
+                };
+                if succeeded { handle.mark_succeeded(); }
                 handle.set_fraction(1.0);
                 window.op_finish(&handle);
                 window.reload();
@@ -3025,6 +3118,8 @@ pub enum OpKind {
     Move,
     Delete,
     Duplicate,
+    Trash,
+    Restore,
 }
 
 impl OpKind {
@@ -3032,7 +3127,8 @@ impl OpKind {
         match self {
             Self::Copy | Self::Duplicate => "edit-copy-symbolic",
             Self::Move => "edit-cut-symbolic",
-            Self::Delete => "user-trash-symbolic",
+            Self::Delete | Self::Trash => "user-trash-symbolic",
+            Self::Restore => "edit-undo-symbolic",
         }
     }
     fn title(self) -> &'static str {
@@ -3041,6 +3137,8 @@ impl OpKind {
             Self::Move => "Moving",
             Self::Delete => "Deleting",
             Self::Duplicate => "Duplicating",
+            Self::Trash => "Moving to Trash",
+            Self::Restore => "Restoring",
         }
     }
     fn done_title(self) -> &'static str {
@@ -3049,6 +3147,8 @@ impl OpKind {
             Self::Move => "Move complete",
             Self::Delete => "Delete complete",
             Self::Duplicate => "Duplicate complete",
+            Self::Trash => "Moved to Trash",
+            Self::Restore => "Restored from Trash",
         }
     }
 }
@@ -3070,6 +3170,9 @@ struct OpState {
     last_byte_rate: f64,
     /// Last ETA written to the label, in seconds, for jitter smoothing.
     last_eta_secs: u64,
+    /// True when every item processed without error. op_finish reads this
+    /// to decide whether to fire the "X complete" desktop notification.
+    succeeded: bool,
 }
 
 const STATS_REFRESH: std::time::Duration = std::time::Duration::from_millis(1000);
@@ -3181,6 +3284,7 @@ impl OpHandle {
             last_stats_emit: now,
             last_byte_rate: 0.0,
             last_eta_secs: 0,
+            succeeded: false,
         }));
 
         Self {
@@ -3204,6 +3308,13 @@ impl OpHandle {
         let mut s = self.state.borrow_mut();
         s.total_items = items;
         s.total_bytes = bytes;
+    }
+
+    /// Mark the op as having completed every item without error. Called by
+    /// the caller after the loop body finishes naturally, NOT from error /
+    /// cancel break paths. Read by op_finish to gate the success notification.
+    pub fn mark_succeeded(&self) {
+        self.state.borrow_mut().succeeded = true;
     }
 
     /// Set the current item line (filename + counter, e.g. "foo.txt (3 of 17)").
@@ -3497,8 +3608,11 @@ async fn delete_recursive(
     // delete child-by-child. delete_future on a trash:/// top-level entry
     // IS supported and recursively removes the trashed item atomically.
     if file.has_uri_scheme("trash") {
-        on_item(&file, 0);
-        return file.delete_future(glib::Priority::DEFAULT).await;
+        let result = file.delete_future(glib::Priority::DEFAULT).await;
+        if result.is_ok() {
+            on_item(&file, 0);
+        }
+        return result;
     }
     let info = file
         .query_info_future(
