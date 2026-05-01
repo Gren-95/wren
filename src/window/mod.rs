@@ -21,8 +21,25 @@ glib::wrapper! {
 impl WrenWindow {
     pub fn new(app: &WrenApplication) -> Self {
         let win: Self = Object::builder().property("application", app).build();
+        // Restore window state (size + maximized + sidebar) before presenting.
+        if app.window_maximized() {
+            win.maximize();
+        }
+        win.imp().split_view.set_show_sidebar(app.sidebar_visible());
         win.connect_close_request(|w| {
             w.save_window_size();
+            if let Some(app) = w.application().and_downcast::<WrenApplication>() {
+                app.set_window_maximized(w.is_maximized());
+                app.set_sidebar_visible(w.imp().split_view.shows_sidebar());
+                // Save the active tab's current location so the next launch
+                // opens there. Empty when no tab is open.
+                if let Some(idx) = w.current_tab_index() {
+                    let tabs = w.imp().tabs.borrow();
+                    if let Some(loc) = tabs.get(idx).and_then(|t| t.navigation.current()) {
+                        app.set_last_directory(&loc.uri());
+                    }
+                }
+            }
             glib::Propagation::Proceed
         });
         win

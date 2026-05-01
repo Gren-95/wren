@@ -628,9 +628,17 @@ impl ObjectImpl for WrenWindow {
         obj.update_selection_actions();
         obj.update_undo_actions();
 
-        // Open first tab at home
-        let home = gio::File::for_path(glib::home_dir());
-        obj.add_tab(home);
+        // Open first tab to the previously-active directory if it still
+        // exists, falling back to $HOME.
+        let initial = obj
+            .application()
+            .and_downcast::<crate::application::WrenApplication>()
+            .map(|app| app.last_directory())
+            .filter(|s| !s.is_empty())
+            .map(|uri| gio::File::for_uri(&uri))
+            .filter(|f| f.query_exists(gio::Cancellable::NONE))
+            .unwrap_or_else(|| gio::File::for_path(glib::home_dir()));
+        obj.add_tab(initial);
     }
 }
 

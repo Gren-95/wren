@@ -16,6 +16,9 @@ pub struct WrenApplication {
     pub sort_reversed: Cell<bool>,
     pub window_width: Cell<i32>,
     pub window_height: Cell<i32>,
+    pub window_maximized: Cell<bool>,
+    pub sidebar_visible: Cell<bool>,
+    pub last_directory: RefCell<String>,
     pub color_scheme: RefCell<String>,
 }
 
@@ -31,6 +34,9 @@ impl Default for WrenApplication {
             sort_reversed: Cell::new(false),
             window_width: Cell::new(1000),
             window_height: Cell::new(700),
+            window_maximized: Cell::new(false),
+            sidebar_visible: Cell::new(true),
+            last_directory: RefCell::new(String::new()),
             color_scheme: RefCell::new("default".to_string()),
         }
     }
@@ -78,6 +84,15 @@ impl WrenApplication {
             if let Ok(v) = kf.integer("Window", "height") {
                 if v > 0 { self.window_height.set(v); }
             }
+            if let Ok(v) = kf.boolean("Window", "maximized") {
+                self.window_maximized.set(v);
+            }
+            if let Ok(v) = kf.boolean("Window", "sidebar_visible") {
+                self.sidebar_visible.set(v);
+            }
+            if let Ok(v) = kf.string("General", "last_directory") {
+                *self.last_directory.borrow_mut() = v.to_string();
+            }
             if let Ok(v) = kf.string("Appearance", "color_scheme") {
                 let s = v.to_string();
                 if matches!(s.as_str(), "default" | "light" | "dark") {
@@ -103,6 +118,9 @@ impl WrenApplication {
         kf.set_boolean("Sort", "reversed", self.sort_reversed.get());
         kf.set_integer("Window", "width", self.window_width.get());
         kf.set_integer("Window", "height", self.window_height.get());
+        kf.set_boolean("Window", "maximized", self.window_maximized.get());
+        kf.set_boolean("Window", "sidebar_visible", self.sidebar_visible.get());
+        kf.set_string("General", "last_directory", &self.last_directory.borrow());
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());

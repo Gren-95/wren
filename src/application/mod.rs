@@ -58,4 +58,22 @@ impl WrenApplication {
         self.imp().window_height.set(h);
         self.imp().save_settings();
     }
+
+    pub fn window_maximized(&self) -> bool { self.imp().window_maximized.get() }
+    pub fn set_window_maximized(&self, v: bool) {
+        self.imp().window_maximized.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn sidebar_visible(&self) -> bool { self.imp().sidebar_visible.get() }
+    pub fn set_sidebar_visible(&self, v: bool) {
+        self.imp().sidebar_visible.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn last_directory(&self) -> String { self.imp().last_directory.borrow().clone() }
+    pub fn set_last_directory(&self, uri: &str) {
+        *self.imp().last_directory.borrow_mut() = uri.to_string();
+        self.imp().save_settings();
+    }
 }
