@@ -1137,7 +1137,7 @@ impl WrenWindow {
                     }
                     let to_delete = not_supported.clone();
                     let total = to_delete.len();
-                    let handle = window.op_start("Deleting");
+                    let handle = window.op_start(OpKind::Delete);
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
@@ -1222,7 +1222,7 @@ impl WrenWindow {
                     }
                     let files = files_clone.clone();
                     let total = files.len();
-                    let handle = window.op_start("Deleting");
+                    let handle = window.op_start(OpKind::Delete);
                     glib::spawn_future_local(glib::clone!(
                         #[weak]
                         window,
@@ -1334,9 +1334,9 @@ impl WrenWindow {
             self.show_toast("Nothing to paste");
             return;
         };
-        let action_label = if is_cut { "Moving" } else { "Copying" };
+        let kind = if is_cut { OpKind::Move } else { OpKind::Copy };
         let total = files.len();
-        let handle = self.op_start(action_label);
+        let handle = self.op_start(kind);
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -2179,9 +2179,9 @@ impl WrenWindow {
     // label, current-item label, ProgressBar, per-op Cancel button). Callers
     // update via methods on the handle and call `op_finish` when done.
 
-    pub fn op_start(&self, title: &str) -> OpHandle {
+    pub fn op_start(&self, kind: OpKind) -> OpHandle {
         let imp = self.imp();
-        let handle = OpHandle::build(title);
+        let handle = OpHandle::build(kind);
         imp.op_popover_box.append(&handle.row);
         imp.op_handles.borrow_mut().push(handle.clone());
         imp.op_button.set_visible(true);
@@ -2190,6 +2190,22 @@ impl WrenWindow {
 
     pub fn op_finish(&self, handle: &OpHandle) {
         let imp = self.imp();
+        // System notification for long, successful ops so the user knows
+        // they can come back to the app — only worth it if the op took at
+        // least 30 s of wall time and wasn't cancelled.
+        let elapsed = handle.state.borrow().start.elapsed();
+        let was_cancelled = handle.cancellable.is_cancelled();
+        if !was_cancelled && elapsed >= std::time::Duration::from_secs(30) {
+            if let Some(app) = self.application() {
+                let notif = gio::Notification::new(handle.kind.done_title());
+                notif.set_body(Some(&format!(
+                    "Finished in {}",
+                    format_duration(elapsed.as_secs())
+                )));
+                app.send_notification(Some("wren-op-done"), &notif);
+            }
+        }
+
         imp.op_popover_box.remove(&handle.row);
         let mut active = imp.op_handles.borrow_mut();
         active.retain(|h| h.cancellable != handle.cancellable);
@@ -2294,7 +2310,7 @@ impl WrenWindow {
                 .basename()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let handle = self.op_start("Duplicating");
+            let handle = self.op_start(OpKind::Duplicate);
             handle.set_item(&display_name);
             handle.set_paths(&file, Some(&dest_file));
             glib::spawn_future_local(glib::clone!(
@@ -2343,9 +2359,9 @@ impl WrenWindow {
                 None => return,
             }
         };
-        let action_label = if is_move { "Moving" } else { "Copying" };
+        let kind = if is_move { OpKind::Move } else { OpKind::Copy };
         let total = files.len();
-        let handle = self.op_start(action_label);
+        let handle = self.op_start(kind);
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -2720,6 +2736,40 @@ pub enum ConflictResolution {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum OpKind {
+    Copy,
+    Move,
+    Delete,
+    Duplicate,
+}
+
+impl OpKind {
+    fn icon_name(self) -> &'static str {
+        match self {
+            Self::Copy | Self::Duplicate => "edit-copy-symbolic",
+            Self::Move => "edit-cut-symbolic",
+            Self::Delete => "user-trash-symbolic",
+        }
+    }
+    fn title(self) -> &'static str {
+        match self {
+            Self::Copy => "Copying",
+            Self::Move => "Moving",
+            Self::Delete => "Deleting",
+            Self::Duplicate => "Duplicating",
+        }
+    }
+    fn done_title(self) -> &'static str {
+        match self {
+            Self::Copy => "Copy complete",
+            Self::Move => "Move complete",
+            Self::Delete => "Delete complete",
+            Self::Duplicate => "Duplicate complete",
+        }
+    }
+}
+
 /// Mutable progress accounting for one in-flight op. Lives behind an
 /// `Rc<RefCell<…>>` inside an OpHandle so multiple callbacks can update it.
 #[derive(Debug)]
@@ -2751,8 +2801,10 @@ const STATS_WARMUP: std::time::Duration = std::time::Duration::from_millis(1500)
 #[derive(Clone, Debug)]
 pub struct OpHandle {
     pub cancellable: gio::Cancellable,
+    pub kind: OpKind,
     pub row: gtk4::Box,
     item_label: gtk4::Label,
+    elapsed_label: gtk4::Label,
     progress: gtk4::ProgressBar,
     stats_label: gtk4::Label,
     src_row: gtk4::Box,
@@ -2763,7 +2815,7 @@ pub struct OpHandle {
 }
 
 impl OpHandle {
-    fn build(title: &str) -> Self {
+    fn build(kind: OpKind) -> Self {
         let cancellable = gio::Cancellable::new();
         let row = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
         row.set_width_request(380);
@@ -2772,20 +2824,30 @@ impl OpHandle {
         row.add_css_class("card");
         row.add_css_class("wren-op-row");
 
-        // ── Header: bold title + flat circular Cancel button ────────────────
+        // ── Header: [icon] [Title] [0:23 elapsed] ⟶ [X cancel] ──────────────
         let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-        let title_label = gtk4::Label::new(Some(title));
+        let title_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        title_box.set_hexpand(true);
+        let icon = gtk4::Image::from_icon_name(kind.icon_name());
+        icon.set_pixel_size(16);
+        let title_label = gtk4::Label::new(Some(kind.title()));
         title_label.set_xalign(0.0);
-        title_label.set_hexpand(true);
         title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         title_label.add_css_class("heading");
+        let elapsed_label = gtk4::Label::new(None);
+        elapsed_label.set_xalign(0.0);
+        elapsed_label.add_css_class("caption");
+        elapsed_label.add_css_class("dim-label");
+        title_box.append(&icon);
+        title_box.append(&title_label);
+        title_box.append(&elapsed_label);
         let cancel_btn = gtk4::Button::from_icon_name("window-close-symbolic");
         cancel_btn.set_tooltip_text(Some("Cancel"));
         cancel_btn.add_css_class("flat");
         cancel_btn.add_css_class("circular");
         let c_clone = cancellable.clone();
         cancel_btn.connect_clicked(move |_| c_clone.cancel());
-        header.append(&title_label);
+        header.append(&title_box);
         header.append(&cancel_btn);
 
         // ── Current item: filename + counter (single emphasised line) ───────
@@ -2840,8 +2902,10 @@ impl OpHandle {
 
         Self {
             cancellable,
+            kind,
             row,
             item_label,
+            elapsed_label,
             progress,
             stats_label,
             src_row,
@@ -3029,6 +3093,10 @@ impl OpHandle {
             parts.push(format!("{} left", format_duration(smoothed_eta)));
         }
         self.stats_label.set_text(&parts.join(" · "));
+        // Elapsed counter next to the title: "· 1m 23s elapsed" once warmup
+        // hits, throttled to the same 1 s cadence as the stats line above.
+        self.elapsed_label
+            .set_text(&format!("· {} elapsed", format_duration(elapsed.as_secs())));
     }
 }
 
