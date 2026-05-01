@@ -1155,6 +1155,7 @@ impl WrenWindow {
                                     .unwrap_or_default();
                                 handle.set_item(&format!("{name} ({} of {total})", idx + 1));
                                 handle.set_fraction(idx as f64 / total as f64);
+                                handle.set_paths(f, None);
                                 if let Err(e) = delete_recursive(f.clone(), &handle.cancellable).await {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete (trash unsupported)", f, None, &e);
@@ -1222,6 +1223,7 @@ impl WrenWindow {
                                     .unwrap_or_default();
                                 handle.set_item(&format!("{name} ({} of {total})", idx + 1));
                                 handle.set_fraction(idx as f64 / total as f64);
+                                handle.set_paths(file, None);
                                 if let Err(e) = delete_recursive(file.clone(), &handle.cancellable).await {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete", file, None, &e);
@@ -1323,6 +1325,7 @@ impl WrenWindow {
                     let display_name = name.to_string_lossy();
                     handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
                     handle.set_fraction(idx as f64 / total as f64);
+                    handle.set_paths(file, Some(&dest_dir.child(&name)));
 
                     let dest_initial = dest_dir.child(&name);
                     let collides = !dest_initial.equal(file)
@@ -2204,6 +2207,7 @@ impl WrenWindow {
                 .unwrap_or_default();
             let handle = self.op_start("Duplicating");
             handle.set_item(&display_name);
+            handle.set_paths(&file, Some(&dest_file));
             glib::spawn_future_local(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
@@ -2262,6 +2266,7 @@ impl WrenWindow {
                     let display_name = name.to_string_lossy();
                     handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
                     handle.set_fraction(idx as f64 / total as f64);
+                    handle.set_paths(file, Some(&dest_dir.child(&name)));
 
                     let dest_initial = dest_dir.child(&name);
                     let collides = !dest_initial.equal(file)
@@ -2546,7 +2551,11 @@ pub enum ConflictResolution {
 pub struct OpHandle {
     pub cancellable: gio::Cancellable,
     pub row: gtk4::Box,
-    item_label: gtk4::Label,
+    /// Expander whose label is the current item summary; expanding it reveals
+    /// the verbose source / destination paths.
+    expander: gtk4::Expander,
+    src_label: gtk4::Label,
+    dest_label: gtk4::Label,
     progress: gtk4::ProgressBar,
 }
 
@@ -2554,7 +2563,7 @@ impl OpHandle {
     fn build(title: &str) -> Self {
         let cancellable = gio::Cancellable::new();
         let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-        row.set_width_request(320);
+        row.set_width_request(360);
         row.set_margin_top(4);
         row.set_margin_bottom(4);
 
@@ -2572,27 +2581,72 @@ impl OpHandle {
         header.append(&title_label);
         header.append(&cancel_btn);
 
-        let item_label = gtk4::Label::new(Some(""));
-        item_label.set_xalign(0.0);
-        item_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-        item_label.set_max_width_chars(40);
-        item_label.add_css_class("caption");
-        item_label.add_css_class("dim-label");
-
         let progress = gtk4::ProgressBar::new();
         progress.set_show_text(true);
         progress.set_text(Some("0%"));
 
-        row.append(&header);
-        row.append(&item_label);
-        row.append(&progress);
+        // Expander: label is a brief item summary ("foo.txt (3 of 17)");
+        // expanding it shows the full source and destination paths.
+        let expander = gtk4::Expander::new(Some(""));
+        expander.set_resize_toplevel(false);
+        let details_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        details_box.set_margin_top(4);
+        details_box.set_margin_start(18);
 
-        Self { cancellable, row, item_label, progress }
+        let src_label = gtk4::Label::new(None);
+        src_label.set_xalign(0.0);
+        src_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        src_label.set_max_width_chars(48);
+        src_label.add_css_class("caption");
+        src_label.add_css_class("dim-label");
+        src_label.set_selectable(true);
+
+        let dest_label = gtk4::Label::new(None);
+        dest_label.set_xalign(0.0);
+        dest_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        dest_label.set_max_width_chars(48);
+        dest_label.add_css_class("caption");
+        dest_label.add_css_class("dim-label");
+        dest_label.set_selectable(true);
+
+        details_box.append(&src_label);
+        details_box.append(&dest_label);
+        expander.set_child(Some(&details_box));
+
+        row.append(&header);
+        row.append(&progress);
+        row.append(&expander);
+
+        Self {
+            cancellable,
+            row,
+            expander,
+            src_label,
+            dest_label,
+            progress,
+        }
     }
 
-    /// Update the second-line label (current filename + counter).
+    /// Set the brief item summary shown next to the disclosure arrow.
     pub fn set_item(&self, msg: &str) {
-        self.item_label.set_text(msg);
+        self.expander.set_label(Some(msg));
+    }
+
+    /// Set the verbose source / destination paths shown when the row is
+    /// expanded. Pass `None` for `dest` on operations that don't have one
+    /// (e.g. delete).
+    pub fn set_paths(&self, src: &gio::File, dest: Option<&gio::File>) {
+        self.src_label.set_text(&format!("From: {}", fmt_path(src)));
+        match dest {
+            Some(d) => {
+                self.dest_label.set_text(&format!("To: {}", fmt_path(d)));
+                self.dest_label.set_visible(true);
+            }
+            None => {
+                self.dest_label.set_text("");
+                self.dest_label.set_visible(false);
+            }
+        }
     }
 
     /// Set the progress bar fraction (0.0 — 1.0) and its overlay text to a %.
