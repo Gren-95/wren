@@ -463,6 +463,7 @@ impl WrenWindow {
             gio::Cancellable::NONE,
         ) {
             Ok(monitor) => {
+                let watched = location.clone();
                 monitor.connect_changed(glib::clone!(
                     #[weak(rename_to = window)]
                     self,
@@ -472,7 +473,12 @@ impl WrenWindow {
                             event,
                             E::Created | E::Deleted | E::Renamed | E::MovedIn | E::MovedOut
                         ) {
-                            window.reload();
+                            // Reload the tab(s) that actually watch this
+                            // directory — NOT the foreground tab. External
+                            // changes (terminal, other apps) to a background
+                            // tab's folder must update that tab, not whatever
+                            // the user happens to be looking at.
+                            window.reload_tabs_at(&watched);
                         }
                     }
                 ));
@@ -482,6 +488,32 @@ impl WrenWindow {
                 }
             }
             Err(e) => eprintln!("Cannot watch directory: {e}"),
+        }
+    }
+
+    /// Reload every tab whose current location equals `location`. Used by
+    /// the per-tab file monitor so external changes refresh the right tab,
+    /// and so multiple tabs viewing the same folder stay in sync.
+    pub fn reload_tabs_at(&self, location: &gio::File) {
+        let to_reload: Vec<usize> = {
+            let tabs = self.imp().tabs.borrow();
+            tabs.iter()
+                .enumerate()
+                .filter_map(|(idx, tab)| {
+                    if tab
+                        .navigation
+                        .current()
+                        .map_or(false, |c| c.equal(location))
+                    {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        for idx in to_reload {
+            self.load_location_for_tab(idx, location.clone());
         }
     }
 
