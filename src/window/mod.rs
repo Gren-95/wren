@@ -432,6 +432,18 @@ impl WrenWindow {
                         window.start_dir_monitor(tab_idx, &location);
                     }
                     Err(e) => {
+                        // Match the success-path guard: if this load was
+                        // superseded by a newer one (or its tab was closed
+                        // and the Vec shifted), don't paint the error onto
+                        // whatever tab now sits at this index.
+                        let is_current = {
+                            let tabs = window.imp().tabs.borrow();
+                            tabs.get(tab_idx)
+                                .map_or(false, |t| t.load_gen.get() == load_gen)
+                        };
+                        if !is_current {
+                            return;
+                        }
                         {
                             let tabs = window.imp().tabs.borrow();
                             if let Some(tab) = tabs.get(tab_idx) {

@@ -1,3 +1,5 @@
+use gtk4::prelude::FileExt;
+
 #[derive(Debug)]
 pub struct NavigationModel {
     back_stack: Vec<gio::File>,
@@ -17,6 +19,12 @@ impl Default for NavigationModel {
 
 impl NavigationModel {
     pub fn navigate_to(&mut self, location: gio::File) -> Option<gio::File> {
+        // No-op when already at this location: don't push a duplicate onto
+        // the back stack, don't clear forward history, don't trigger a
+        // needless reload (caller checks for None and skips loading).
+        if self.current.as_ref().map_or(false, |c| c.equal(&location)) {
+            return None;
+        }
         if let Some(current) = self.current.take() {
             self.back_stack.push(current);
         }
