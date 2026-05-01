@@ -1315,6 +1315,7 @@ impl WrenWindow {
             #[strong]
             cancellable,
             async move {
+                let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
                     if cancellable.is_cancelled() {
                         break;
@@ -1326,15 +1327,46 @@ impl WrenWindow {
                     if is_cut && dest_dir.child(&name).equal(file) {
                         continue;
                     }
-                    let dest = unique_dest(&dest_dir, &name);
                     let action = if is_cut { "move" } else { "copy" };
-                    log_op(action, file, Some(&dest));
                     let display_name = name.to_string_lossy();
                     window.op_update(&format!(
-                        "{action_label} {} ({} of {total})",
-                        display_name,
+                        "{action_label} {display_name} ({} of {total})",
                         idx + 1
                     ));
+
+                    let dest_initial = dest_dir.child(&name);
+                    let collides = !dest_initial.equal(file)
+                        && dest_initial.query_exists(gio::Cancellable::NONE);
+                    let resolution = if collides {
+                        match policy {
+                            Some(r) => r,
+                            None => {
+                                let (r, apply) = window.resolve_conflict(&display_name).await;
+                                if apply {
+                                    policy = Some(r);
+                                }
+                                r
+                            }
+                        }
+                    } else {
+                        ConflictResolution::Rename
+                    };
+                    let dest = match resolution {
+                        ConflictResolution::Skip => continue,
+                        ConflictResolution::Cancel => break,
+                        ConflictResolution::Replace => {
+                            if let Err(e) = delete_recursive(dest_initial.clone(), &cancellable).await {
+                                if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                    log_err("replace (delete existing)", &dest_initial, None, &e);
+                                    window.show_toast(&format!("Could not replace: {e}"));
+                                }
+                                break;
+                            }
+                            dest_initial
+                        }
+                        ConflictResolution::Rename => unique_dest(&dest_dir, &name),
+                    };
+                    log_op(action, file, Some(&dest));
 
                     if let Err(e) = copy_recursive(file.clone(), dest.clone(), &cancellable).await {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
@@ -2050,6 +2082,35 @@ impl WrenWindow {
         }
     }
 
+    /// Ask the user how to resolve a name collision. Returns the resolution
+    /// plus whether to apply it to subsequent collisions in the same batch.
+    async fn resolve_conflict(&self, name: &str) -> (ConflictResolution, bool) {
+        let dialog = adw::AlertDialog::new(
+            Some("File already exists"),
+            Some(&format!("\"{name}\" already exists in the destination.")),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("skip", "Skip");
+        dialog.add_response("rename", "Rename");
+        dialog.add_response("replace", "Replace");
+        dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("rename"));
+        dialog.set_close_response("cancel");
+
+        let apply_to_all = gtk4::CheckButton::with_label("Apply to all conflicts in this operation");
+        dialog.set_extra_child(Some(&apply_to_all));
+
+        let response = dialog.choose_future(Some(self)).await;
+        let apply = apply_to_all.is_active();
+        let res = match response.as_str() {
+            "skip" => ConflictResolution::Skip,
+            "replace" => ConflictResolution::Replace,
+            "rename" => ConflictResolution::Rename,
+            _ => ConflictResolution::Cancel,
+        };
+        (res, apply)
+    }
+
     // ── About ────────────────────────────────────────────────────────────────
 
     pub fn show_about(&self) {
@@ -2163,6 +2224,7 @@ impl WrenWindow {
             #[strong]
             cancellable,
             async move {
+                let mut policy: Option<ConflictResolution> = None;
                 for (idx, file) in files.iter().enumerate() {
                     if cancellable.is_cancelled() {
                         break;
@@ -2170,14 +2232,47 @@ impl WrenWindow {
                     let Some(name) = file.basename() else { continue };
                     // Dropping a file onto its own parent dir is a no-op.
                     if dest_dir.child(&name).equal(file) { continue; }
-                    let dest = unique_dest(&dest_dir, &name);
                     let action = if is_move { "drop-move" } else { "drop-copy" };
-                    log_op(action, file, Some(&dest));
+                    let display_name = name.to_string_lossy();
                     window.op_update(&format!(
-                        "{action_label} {} ({} of {total})",
-                        name.to_string_lossy(),
+                        "{action_label} {display_name} ({} of {total})",
                         idx + 1
                     ));
+
+                    let dest_initial = dest_dir.child(&name);
+                    let collides = !dest_initial.equal(file)
+                        && dest_initial.query_exists(gio::Cancellable::NONE);
+                    let resolution = if collides {
+                        match policy {
+                            Some(r) => r,
+                            None => {
+                                let (r, apply) = window.resolve_conflict(&display_name).await;
+                                if apply {
+                                    policy = Some(r);
+                                }
+                                r
+                            }
+                        }
+                    } else {
+                        ConflictResolution::Rename
+                    };
+                    let dest = match resolution {
+                        ConflictResolution::Skip => continue,
+                        ConflictResolution::Cancel => break,
+                        ConflictResolution::Replace => {
+                            if let Err(e) = delete_recursive(dest_initial.clone(), &cancellable).await {
+                                if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                    log_err("replace (delete existing)", &dest_initial, None, &e);
+                                    window.show_toast(&format!("Could not replace: {e}"));
+                                }
+                                break;
+                            }
+                            dest_initial
+                        }
+                        ConflictResolution::Rename => unique_dest(&dest_dir, &name),
+                    };
+                    log_op(action, file, Some(&dest));
+
                     if let Err(e) = copy_recursive(file.clone(), dest.clone(), &cancellable).await {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
@@ -2408,6 +2503,14 @@ fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> gio::File {
 
 fn cancelled_err() -> glib::Error {
     glib::Error::new(gio::IOErrorEnum::Cancelled, "Operation cancelled")
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ConflictResolution {
+    Skip,
+    Replace,
+    Rename,
+    Cancel,
 }
 
 async fn copy_recursive(
