@@ -232,6 +232,7 @@ impl ApplicationImpl for WrenApplication {
         app.set_accels_for_action("win.new-folder", &["<Primary><Shift>n"]);
         app.set_accels_for_action("win.toggle-hidden", &["<Primary>h"]);
         app.set_accels_for_action("win.open-with", &["<Primary><Shift>o"]);
+        app.set_accels_for_action("win.copy-path", &["<Primary><Shift>c"]);
         app.set_accels_for_action("win.focus-location", &["<Primary>l"]);
         app.set_accels_for_action("win.open-in-terminal", &["<Primary><Shift>t"]);
         app.set_accels_for_action("win.zoom-in", &["<Primary>equal", "<Primary>plus"]);

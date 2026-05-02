@@ -234,7 +234,15 @@ impl WrenWindow {
                             }
                             dest_initial
                         }
-                        ConflictResolution::Rename => unique_dest(&dest_dir, &name),
+                        ConflictResolution::Rename => match unique_dest(&dest_dir, &name) {
+                            Some(d) => d,
+                            None => {
+                                window.show_toast(&format!(
+                                    "Could not find a free name for {display_name}"
+                                ));
+                                continue;
+                            }
+                        },
                     };
                     log_op(action, file, Some(&dest));
 
@@ -318,16 +326,24 @@ impl WrenWindow {
             None    => format!("{stem}{suffix}"),
         };
 
-        // Find a non-colliding link path
+        // Find a non-colliding link path. Cap at 1000 attempts so a
+        // pathological directory doesn't spin forever.
         let link_path = {
             let first = dest_dir_path.join(make_name(" (link)"));
             if !first.exists() {
                 first
             } else {
-                (2u32..).find_map(|i| {
+                let found = (2u32..=1000).find_map(|i| {
                     let p = dest_dir_path.join(make_name(&format!(" (link {i})")));
                     (!p.exists()).then_some(p)
-                }).expect("will eventually find a free name")
+                });
+                match found {
+                    Some(p) => p,
+                    None => {
+                        self.show_toast("Could not find a free name for the link");
+                        return;
+                    }
+                }
             }
         };
 
@@ -412,12 +428,19 @@ impl WrenWindow {
                 if !first.exists() {
                     first
                 } else {
-                    (2u32..)
-                        .find_map(|i| {
-                            let p = dest_dir_path.join(make_name(&format!(" (copy {i})")));
-                            (!p.exists()).then_some(p)
-                        })
-                        .expect("will eventually find a free name")
+                    match (2u32..=1000).find_map(|i| {
+                        let p = dest_dir_path.join(make_name(&format!(" (copy {i})")));
+                        (!p.exists()).then_some(p)
+                    }) {
+                        Some(p) => p,
+                        None => {
+                            self.show_toast(&format!(
+                                "Could not find a free name for {}",
+                                name.to_string_lossy()
+                            ));
+                            continue;
+                        }
+                    }
                 }
             };
             let dest_file = gio::File::for_path(&dest_path);
@@ -542,7 +565,15 @@ impl WrenWindow {
                             }
                             dest_initial
                         }
-                        ConflictResolution::Rename => unique_dest(&dest_dir, &name),
+                        ConflictResolution::Rename => match unique_dest(&dest_dir, &name) {
+                            Some(d) => d,
+                            None => {
+                                window.show_toast(&format!(
+                                    "Could not find a free name for {display_name}"
+                                ));
+                                continue;
+                            }
+                        },
                     };
                     log_op(action, file, Some(&dest));
 

@@ -41,11 +41,13 @@ pub fn log_err(
 
 // Returns a non-colliding child path under dest_dir. If `dest_dir/name` is
 // free, returns that. Otherwise appends " (Copy)" / " (Copy 2)" / ... to the
-// stem until an unused name is found.
-pub fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> gio::File {
+// stem until an unused name is found, up to 1000 attempts. Returns None if
+// every candidate is taken — in practice indicates a stuck filesystem or
+// malicious input rather than a legitimate "out of names" condition.
+pub fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> Option<gio::File> {
     let dest = dest_dir.child(name);
     if !dest.query_exists(gio::Cancellable::NONE) {
-        return dest;
+        return Some(dest);
     }
     let stem = name
         .file_stem()
@@ -59,16 +61,15 @@ pub fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> gio::File {
         .unwrap_or_default();
     let candidate = dest_dir.child(&format!("{} (Copy){}", stem, ext));
     if !candidate.query_exists(gio::Cancellable::NONE) {
-        return candidate;
+        return Some(candidate);
     }
-    let mut i = 2u32;
-    loop {
+    for i in 2u32..=1000 {
         let c = dest_dir.child(&format!("{} (Copy {}){}", stem, i, ext));
         if !c.query_exists(gio::Cancellable::NONE) {
-            return c;
+            return Some(c);
         }
-        i += 1;
     }
+    None
 }
 
 pub fn cancelled_err() -> glib::Error {

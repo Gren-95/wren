@@ -382,6 +382,13 @@ impl WrenFileList {
         }
     }
 
+    /// Scroll-and-focus a position in the underlying ListView. Used by
+    /// type-ahead select to bring the matched item into view.
+    pub fn scroll_to(&self, pos: u32, flags: gtk4::ListScrollFlags) {
+        let imp = imp::WrenFileList::from_obj(self);
+        imp.list_view.scroll_to(pos, flags, None);
+    }
+
     pub fn connect_item_activated<F: Fn(&FileObject) + 'static>(&self, f: F) {
         let imp = imp::WrenFileList::from_obj(self);
         imp.list_view.connect_activate(move |list_view, pos| {

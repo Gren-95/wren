@@ -59,6 +59,11 @@ pub struct WrenWindow {
     pub op_popover_box: gtk4::Box,
     /// Active operations (cancellable + the row widget that displays them).
     pub op_handles: RefCell<Vec<crate::window::OpHandle>>,
+    /// Currently-shown Undo toast for trash. Dismissed before issuing
+    /// a new one so the Undo button always refers to the most recent
+    /// trash op (otherwise toasts queue and the user clicks Undo on
+    /// the wrong one).
+    pub active_undo_toast: RefCell<Option<adw::Toast>>,
 }
 
 impl Default for WrenWindow {
@@ -90,6 +95,7 @@ impl Default for WrenWindow {
             redo_stack: Default::default(),
             op_popover_box: gtk4::Box::new(gtk4::Orientation::Vertical, 4),
             op_handles: Default::default(),
+            active_undo_toast: Default::default(),
         }
     }
 }
@@ -720,6 +726,7 @@ impl ObjectImpl for WrenWindow {
         ));
         obj.add_controller(mouse_nav);
 
+        obj.setup_typeahead();
         obj.setup_search();
         obj.setup_volume_monitor();
         obj.update_selection_actions();

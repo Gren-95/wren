@@ -688,6 +688,90 @@ impl WrenWindow {
         }
     }
 
+    /// Type-ahead select: typing letters while a file view has focus
+    /// jumps to the first item whose name starts with the buffered
+    /// prefix. The buffer resets after 1.2s of inactivity. Active
+    /// modifiers (Ctrl/Alt/Super) are passed through so accels still
+    /// fire; keys consumed by a focused entry never reach this
+    /// controller because EventControllerKey on the window bubbles
+    /// after the focus widget.
+    pub fn setup_typeahead(&self) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::time::Instant;
+
+        let state: Rc<RefCell<(String, Option<Instant>)>> =
+            Rc::new(RefCell::new((String::new(), None)));
+
+        let key = gtk4::EventControllerKey::new();
+        key.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = window)] self,
+            #[strong] state,
+            #[upgrade_or] glib::Propagation::Proceed,
+            move |_, keyval, _keycode, modifiers| {
+                // Anything with a non-shift modifier is an accelerator.
+                let m = modifiers
+                    & (gtk4::gdk::ModifierType::CONTROL_MASK
+                        | gtk4::gdk::ModifierType::ALT_MASK
+                        | gtk4::gdk::ModifierType::SUPER_MASK
+                        | gtk4::gdk::ModifierType::META_MASK);
+                if !m.is_empty() {
+                    return glib::Propagation::Proceed;
+                }
+                let Some(ch) = keyval.to_unicode() else {
+                    return glib::Propagation::Proceed;
+                };
+                if !is_typeahead_char(ch) {
+                    return glib::Propagation::Proceed;
+                }
+
+                let now = Instant::now();
+                let mut s = state.borrow_mut();
+                let stale = s
+                    .1
+                    .is_none_or(|t| now.duration_since(t) > std::time::Duration::from_millis(1200));
+                if stale {
+                    s.0.clear();
+                }
+                s.0.push(ch.to_ascii_lowercase());
+                s.1 = Some(now);
+                let prefix = s.0.clone();
+                drop(s);
+
+                if window.typeahead_select_prefix(&prefix) {
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
+        ));
+        self.add_controller(key);
+    }
+
+    /// Find and select the first item in the active tab whose lower-cased
+    /// name starts with `prefix`. Returns true if a match was found.
+    fn typeahead_select_prefix(&self, prefix: &str) -> bool {
+        let Some(idx) = self.current_tab_index() else { return false };
+        let tabs = self.imp().tabs.borrow();
+        let Some(tab) = tabs.get(idx) else { return false };
+        let Some(model) = tab.dir_model.as_ref() else { return false };
+        let selection = model.selection.clone();
+        let n = selection.n_items();
+        for pos in 0..n {
+            let Some(obj) = selection.item(pos).and_downcast::<FileObject>() else {
+                continue;
+            };
+            if obj.name().to_lowercase().starts_with(prefix) {
+                selection.select_item(pos, true);
+                let scroll_flags = gtk4::ListScrollFlags::FOCUS;
+                tab.file_grid.scroll_to(pos, scroll_flags);
+                tab.file_list.scroll_to(pos, scroll_flags);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn setup_search(&self) {
         let imp = self.imp();
 
@@ -1058,7 +1142,12 @@ impl WrenWindow {
                         #[weak]
                         window,
                         async move {
-                            let mut errors = 0usize;
+                            // Collect (old_name, error_message) for every
+                            // failure so the user can see which files
+                            // didn't rename and why, rather than just a
+                            // bare "N could not be renamed" toast.
+                            let mut errors: Vec<(String, String)> = Vec::new();
+                            let mut renamed = 0usize;
                             for file in &files {
                                 let Some(old_name) = file
                                     .basename()
@@ -1070,19 +1159,22 @@ impl WrenWindow {
                                 if new_name == old_name {
                                     continue;
                                 }
-                                if let Err(_) = file
+                                match file
                                     .set_display_name_future(&new_name, glib::Priority::DEFAULT)
                                     .await
                                 {
-                                    errors += 1;
+                                    Ok(_) => renamed += 1,
+                                    Err(e) => errors.push((old_name, e.to_string())),
                                 }
                             }
-                            if errors > 0 {
-                                window.show_toast(&format!(
-                                    "Batch rename: {errors} file(s) could not be renamed"
-                                ));
-                            }
                             window.reload();
+                            if errors.is_empty() {
+                                if renamed > 0 {
+                                    window.show_toast(&format!("Renamed {renamed} file(s)"));
+                                }
+                            } else {
+                                window.show_batch_rename_errors(renamed, errors);
+                            }
                         }
                     ));
                 }
@@ -1711,14 +1803,66 @@ impl WrenWindow {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
     }
 
+    /// Per-file failure dialog used by batch rename. A toast can only
+    /// say "N failed" — this dialog lists each (file, reason) so the
+    /// user can act on the actual failures.
+    pub fn show_batch_rename_errors(&self, renamed: usize, errors: Vec<(String, String)>) {
+        let body = if renamed == 0 {
+            format!("{} file(s) could not be renamed.", errors.len())
+        } else {
+            format!(
+                "Renamed {renamed} file(s); {} could not be renamed.",
+                errors.len()
+            )
+        };
+        let dialog = adw::AlertDialog::new(Some("Batch Rename"), Some(&body));
+        let list = gtk4::ScrolledWindow::new();
+        list.set_min_content_height(160);
+        list.set_max_content_height(320);
+        list.set_propagate_natural_height(true);
+        let lb = gtk4::ListBox::new();
+        lb.add_css_class("boxed-list");
+        for (name, err) in &errors {
+            let row = adw::ActionRow::new();
+            row.set_title(&glib::markup_escape_text(name));
+            row.set_subtitle(&glib::markup_escape_text(err));
+            lb.append(&row);
+        }
+        list.set_child(Some(&lb));
+        dialog.set_extra_child(Some(&list));
+        dialog.add_response("ok", "Close");
+        dialog.set_default_response(Some("ok"));
+        dialog.set_close_response("ok");
+        dialog.present(Some(self));
+    }
+
     /// Toast variant with an "Undo" button wired to `win.undo`.
     /// Used by move-to-trash so a single trashed item can be reversed
     /// without opening the trash view.
+    ///
+    /// Coalesces with previous undo toasts: the prior one is dismissed
+    /// before the new one is shown, so the visible Undo button always
+    /// refers to the latest trash op (matches the LIFO undo stack).
     pub fn show_undo_toast(&self, message: &str) {
+        let imp = self.imp();
+        if let Some(prev) = imp.active_undo_toast.borrow_mut().take() {
+            prev.dismiss();
+        }
         let toast = adw::Toast::new(message);
         toast.set_button_label(Some("Undo"));
         toast.set_action_name(Some("win.undo"));
-        self.imp().toast_overlay.add_toast(toast);
+        toast.connect_dismissed(glib::clone!(
+            #[weak(rename_to = window)] self,
+            move |t| {
+                let imp = window.imp();
+                let mut slot = imp.active_undo_toast.borrow_mut();
+                if slot.as_ref().is_some_and(|cur| cur == t) {
+                    *slot = None;
+                }
+            }
+        ));
+        imp.active_undo_toast.replace(Some(toast.clone()));
+        imp.toast_overlay.add_toast(toast);
     }
 
     // ── File-operation progress + cancel ─────────────────────────────────────
@@ -1902,6 +2046,8 @@ impl WrenWindow {
             ("Delete",           "Move to Trash"),
             ("Shift + Delete",   "Delete Permanently"),
             ("Ctrl + Shift + N", "New Folder"),
+            ("Ctrl + Shift + O", "Open With…"),
+            ("Ctrl + Shift + C", "Copy Location"),
             ("Ctrl + D",         "Add Bookmark"),
             ("Ctrl + Shift + R", "Batch Rename"),
             ("Alt + Enter",      "Properties"),
@@ -1970,4 +2116,16 @@ impl WrenWindow {
             app.set_window_size(w, h);
         }
     }
+}
+
+// True if `ch` is a character we want to feed into the type-ahead
+// buffer. We accept letters, digits, and a small whitelist of
+// punctuation that appears in real filenames; everything else
+// (newlines, control chars, isolated symbols) bails out so accels
+// and view shortcuts still work.
+fn is_typeahead_char(ch: char) -> bool {
+    if ch.is_alphanumeric() {
+        return true;
+    }
+    matches!(ch, '.' | '_' | '-' | ' ' | '(' | ')' | '\'' | ',')
 }

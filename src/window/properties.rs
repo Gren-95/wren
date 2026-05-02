@@ -11,13 +11,16 @@ impl WrenWindow {
         let objs = self.selected_file_objects();
         let file_obj = objs.first().cloned();
         // Resolve a gio::File for the subject (selected item, or current dir).
+        // For non-local schemes (trash:///, sftp://, smb://) `.path()` is None,
+        // so fall back to the URI — empty string would be confusing.
+        let location_str = |f: &gio::File| {
+            f.path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| f.uri().to_string())
+        };
         let (target, name, content_type, file_size, path_str, is_directory) =
             if let Some(ref obj) = file_obj {
-                let path = obj
-                    .file()
-                    .path()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                let path = location_str(&obj.file());
                 (
                     obj.file().clone(),
                     obj.name(),
@@ -37,10 +40,7 @@ impl WrenWindow {
                     .basename()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "Folder".to_string());
-                let path = loc
-                    .path()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                let path = location_str(&loc);
                 (loc.clone(), name.into(), "inode/directory".into(), 0u64, path, true)
             };
 
