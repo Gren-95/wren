@@ -512,7 +512,13 @@ impl WrenWindow {
                     pre_walk_total(&files, is_move, &handle.cancellable).await;
                 handle.set_total(total_items, total_bytes);
 
-                let mut policy: Option<ConflictResolution> = None;
+                // Drag-drop intentionally diverges from paste here:
+                // we *never* ask "Replace / Skip / Rename" on a name
+                // collision. Drag-drop is a quick gesture, the user
+                // doesn't want to be interrupted; we silently rename
+                // colliding files to "<name> (Copy)", "<name> (Copy 2)"
+                // etc. via unique_dest. Paste keeps the conflict
+                // dialog because pasting is a more deliberate action.
                 let succeeded = 'op: {
                 for (idx, file) in files.iter().enumerate() {
                     if handle.cancellable.is_cancelled() {
@@ -526,54 +532,17 @@ impl WrenWindow {
                     handle.set_item(&format!("{display_name} ({} of {total})", idx + 1));
                     handle.set_paths(file, Some(&dest_dir.child(&name)));
 
-                    let dest_initial = dest_dir.child(&name);
-                    let collides = !dest_initial.equal(file)
-                        && dest_initial.query_exists(gio::Cancellable::NONE);
-                    let resolution = if collides {
-                        match policy {
-                            Some(r) => r,
-                            None => {
-                                let (r, apply) = window.resolve_conflict(&display_name).await;
-                                if apply {
-                                    policy = Some(r);
-                                }
-                                r
-                            }
+                    // Always pick a non-colliding name (no-op if the
+                    // straightforward dest is already free, "(Copy)"
+                    // suffix etc. otherwise).
+                    let dest = match unique_dest(&dest_dir, &name) {
+                        Some(d) => d,
+                        None => {
+                            window.show_toast(&format!(
+                                "Could not find a free name for {display_name}"
+                            ));
+                            continue;
                         }
-                    } else {
-                        ConflictResolution::Rename
-                    };
-                    let dest = match resolution {
-                        ConflictResolution::Skip => continue,
-                        ConflictResolution::Cancel => break 'op false,
-                        ConflictResolution::Replace => {
-                            // Replace's pre-delete: show path activity but
-                            // don't tick the main counter (these items aren't
-                            // in the pre-walked total).
-                            if let Err(e) = delete_recursive(
-                                dest_initial.clone(),
-                                &handle.cancellable,
-                                handle.paths_only_callback(),
-                            )
-                            .await
-                            {
-                                if !e.matches(gio::IOErrorEnum::Cancelled) {
-                                    log_err("replace (delete existing)", &dest_initial, None, &e);
-                                    window.show_toast(&format!("Could not replace: {e}"));
-                                }
-                                break 'op false;
-                            }
-                            dest_initial
-                        }
-                        ConflictResolution::Rename => match unique_dest(&dest_dir, &name) {
-                            Some(d) => d,
-                            None => {
-                                window.show_toast(&format!(
-                                    "Could not find a free name for {display_name}"
-                                ));
-                                continue;
-                            }
-                        },
                     };
                     log_op(action, file, Some(&dest));
 
