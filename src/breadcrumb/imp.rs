@@ -288,17 +288,20 @@ impl WrenBreadcrumbBar {
             let row = gtk4::ListBoxRow::new();
             row.set_widget_name(name);
             row.set_can_focus(false);
-            let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
-            row_box.set_margin_start(10);
-            row_box.set_margin_end(10);
-            row_box.set_margin_top(6);
-            row_box.set_margin_bottom(6);
+            // Row is edge-to-edge; the inner box carries the 16px
+            // horizontal padding. 8px top/bottom yields a ~36px row
+            // height — matches YouTube's search suggestions.
+            let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+            row_box.set_margin_start(16);
+            row_box.set_margin_end(16);
+            row_box.set_margin_top(8);
+            row_box.set_margin_bottom(8);
             let icon = gtk4::Image::from_icon_name(if *is_dir {
                 "folder-symbolic"
             } else {
                 "text-x-generic-symbolic"
             });
-            icon.set_pixel_size(16);
+            icon.set_pixel_size(20);
             icon.add_css_class("dim-label");
             let label = gtk4::Label::new(Some(name));
             label.set_xalign(0.0);

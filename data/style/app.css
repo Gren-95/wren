@@ -74,18 +74,16 @@ button.wren-current-crumb:hover {
   background-color: alpha(@accent_color, 0.25);
 }
 
-/* Path entry (Ctrl+L / clicking current crumb) — moderate rounded
-   rectangle (rather than a full pill) so the suggestions popover
-   below can attach with matching corners. */
+/* Path entry (Ctrl+L / clicking current crumb) — pill-shaped, like
+   YouTube's search input. The bottom half goes square only while the
+   suggestions popover is showing so the entry + dropdown read as one
+   capsule that grows downward. */
 .wren-path-entry {
-  border-radius: 8px;
-  padding: 5px 10px;
+  border-radius: 9999px;
+  padding: 5px 14px;
 }
-/* Squared-off bottom while suggestions are showing, so the entry +
-   dropdown read as one combined widget — like an HTML <datalist>. */
 .wren-path-entry.wren-path-entry-open {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+  border-radius: 9999px 9999px 0 0;
 }
 
 /* Keyboard shortcut labels in the shortcuts dialog */
@@ -193,26 +191,27 @@ button.wren-sidebar-toggle:hover {
 }
 
 /* ── Path-suggestion popover ──────────────────────────────────────────────
-   Visually merged with the Ctrl+L entry above: square top corners,
-   8px bottom corners (matching the entry's static radius), no arrow.
-   Reads as a single combined widget — like an HTML <datalist>. */
+   YouTube-style attached dropdown. Square top (joins the entry),
+   pill-radius bottom corners (~20px). 8px vertical padding, rows go
+   edge-to-edge. */
 .wren-suggest-popover > contents {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
-  border-bottom-left-radius: 8px;
-  border-bottom-right-radius: 8px;
-  padding: 4px;
+  border-bottom-left-radius: 20px;
+  border-bottom-right-radius: 20px;
+  padding: 8px 0;
 }
 .wren-suggest-list > row {
-  border-radius: 6px;
-  margin: 1px 2px;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
   transition: background-color 80ms ease;
 }
 .wren-suggest-list > row:hover {
-  background-color: alpha(currentColor, 0.08);
+  background-color: alpha(currentColor, 0.07);
 }
 .wren-suggest-list > row:selected {
-  background-color: alpha(@accent_color, 0.18);
+  background-color: alpha(currentColor, 0.10);
   color: inherit;
 }
 
