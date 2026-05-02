@@ -15,6 +15,7 @@
                 <property name="tooltip-text">Toggle Sidebar</property>
                 <style>
                   <class name="flat"/>
+                  <class name="wren-sidebar-toggle"/>
                 </style>
               </object>
             </child>

@@ -153,16 +153,16 @@ button.wren-breadcrumb:drop(active) {
 
 /* ── Sidebar ──────────────────────────────────────────────────────────────
    The header-bar toggle: GTK paints a tinted background when a flat
-   GtkToggleButton is `:checked` to indicate state. The icon (panel-show-/
-   panel-hide-) already tells you the state, so we strip the tint and only
-   keep a subtle hover feedback — the toggle blends with the rest of the
-   header bar instead of looking selected. */
-#sidebar_button:checked,
-#sidebar_button:checked:hover:not(:active) {
+   GtkToggleButton is `:checked` to indicate state. The icon (sidebar-show-)
+   already tells you the state, so we strip the tint and only keep a subtle
+   hover feedback. NOTE: GTK4 CSS `#id` matches widget CSS-name, not the
+   .ui buildable id — so we use a custom class on the button instead. */
+button.wren-sidebar-toggle:checked,
+button.wren-sidebar-toggle:checked:hover {
   background: none;
   box-shadow: none;
 }
-#sidebar_button:hover {
+button.wren-sidebar-toggle:hover {
   background-color: alpha(currentColor, 0.08);
 }
 
