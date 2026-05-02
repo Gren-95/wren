@@ -51,18 +51,25 @@ impl ObjectImpl for WrenBreadcrumbBar {
         popover.set_position(gtk4::PositionType::Bottom);
         popover.set_has_arrow(false);
         popover.add_css_class("wren-suggest-popover");
+        // The popover's default focus dance pulls focus away from the
+        // entry on `popup()`. Disabling it keeps the cursor in the
+        // entry while the popover surfaces.
+        popover.set_can_focus(false);
 
         let scroll = gtk4::ScrolledWindow::new();
-        scroll.set_min_content_width(280);
-        scroll.set_max_content_width(560);
-        scroll.set_max_content_height(280);
+        scroll.set_min_content_width(360);
+        scroll.set_max_content_width(640);
+        scroll.set_max_content_height(320);
         scroll.set_propagate_natural_width(true);
         scroll.set_propagate_natural_height(true);
         scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
 
         let list = gtk4::ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
-        list.add_css_class("navigation-sidebar"); // borrowed sidebar styling
+        list.add_css_class("wren-suggest-list");
+        // Don't let the list intercept focus on click — the entry
+        // should keep the cursor and bounce keystrokes through.
+        list.set_can_focus(false);
         scroll.set_child(Some(&list));
         popover.set_child(Some(&scroll));
         popover.set_parent(&*self.path_entry);
@@ -228,7 +235,14 @@ impl WrenBreadcrumbBar {
         let raw = entry.text().to_string();
         let matches = super::list_completions(&raw, 50);
 
-        // Clear previous rows.
+        // Capture the previously-highlighted name so we can restore the
+        // user's selection after rebuild — without this, every
+        // keystroke snaps the highlight back to row 0 even when the
+        // user just arrowed down.
+        let prev = list
+            .selected_row()
+            .map(|r| r.widget_name().to_string());
+
         while let Some(child) = list.first_child() {
             list.remove(&child);
         }
@@ -240,20 +254,20 @@ impl WrenBreadcrumbBar {
 
         for (name, is_dir) in &matches {
             let row = gtk4::ListBoxRow::new();
-            // Stash the basename on widget-name so the activation
-            // handler can read it back without juggling closures.
             row.set_widget_name(name);
-            let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-            row_box.set_margin_start(6);
-            row_box.set_margin_end(6);
-            row_box.set_margin_top(4);
-            row_box.set_margin_bottom(4);
+            row.set_can_focus(false);
+            let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+            row_box.set_margin_start(10);
+            row_box.set_margin_end(10);
+            row_box.set_margin_top(6);
+            row_box.set_margin_bottom(6);
             let icon = gtk4::Image::from_icon_name(if *is_dir {
                 "folder-symbolic"
             } else {
                 "text-x-generic-symbolic"
             });
             icon.set_pixel_size(16);
+            icon.add_css_class("dim-label");
             let label = gtk4::Label::new(Some(name));
             label.set_xalign(0.0);
             label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
@@ -264,9 +278,26 @@ impl WrenBreadcrumbBar {
             list.append(&row);
         }
 
-        // Pre-select the first row so Enter / arrow keys feel responsive.
-        if let Some(first) = list.row_at_index(0) {
-            list.select_row(Some(&first));
+        // Restore prior highlight if its row still exists, else pick
+        // the first row so Enter feels responsive.
+        let mut restored = false;
+        if let Some(prev_name) = prev {
+            let mut child = list.first_child();
+            while let Some(c) = child.clone() {
+                if let Some(r) = c.downcast_ref::<gtk4::ListBoxRow>() {
+                    if r.widget_name().as_str() == prev_name {
+                        list.select_row(Some(r));
+                        restored = true;
+                        break;
+                    }
+                }
+                child = c.next_sibling();
+            }
+        }
+        if !restored {
+            if let Some(first) = list.row_at_index(0) {
+                list.select_row(Some(&first));
+            }
         }
         if !popover.is_visible() {
             popover.popup();
@@ -281,25 +312,21 @@ impl WrenBreadcrumbBar {
 
     pub fn move_selection(&self, delta: i32) {
         let Some(list) = self.suggest_list.borrow().clone() else { return };
-        let n = {
-            let mut count = 0;
-            let mut child = list.first_child();
-            while let Some(c) = child {
-                count += 1;
-                child = c.next_sibling();
-            }
-            count
-        };
-        if n == 0 { return };
+        let mut n = 0i32;
+        let mut child = list.first_child();
+        while let Some(c) = child.clone() {
+            n += 1;
+            child = c.next_sibling();
+        }
+        if n == 0 { return; }
         let cur = list.selected_row().map(|r| r.index()).unwrap_or(-1);
         let next = (cur + delta).rem_euclid(n);
         if let Some(row) = list.row_at_index(next) {
             list.select_row(Some(&row));
-            // Scroll the row into view.
+            // ListBoxRow inherits set_can_focus(false) from the rows
+            // we built above, so this scrolls without yanking focus
+            // off the entry.
             row.grab_focus();
-            // grab_focus shifts focus away from the entry; redirect
-            // back so typing keeps reaching the path entry.
-            self.path_entry.grab_focus();
         }
     }
 }

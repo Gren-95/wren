@@ -184,3 +184,24 @@ button.wren-sidebar-toggle:hover {
   color: alpha(currentColor, 0.55);
 }
 
+/* ── Path-suggestion popover ──────────────────────────────────────────────
+   Lives below the Ctrl+L entry. Rounded rows, subtle hover, accent
+   highlight on the selected row so arrow-key navigation reads
+   without forcing keyboard focus into the row (which would yank it
+   away from the entry). */
+.wren-suggest-popover contents {
+  padding: 4px;
+}
+.wren-suggest-list > row {
+  border-radius: 6px;
+  margin: 1px 2px;
+  transition: background-color 80ms ease;
+}
+.wren-suggest-list > row:hover {
+  background-color: alpha(currentColor, 0.08);
+}
+.wren-suggest-list > row:selected {
+  background-color: alpha(@accent_color, 0.18);
+  color: inherit;
+}
+

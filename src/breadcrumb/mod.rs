@@ -188,8 +188,13 @@ impl WrenBreadcrumbBar {
         if path_text.starts_with('/') && !path_text.ends_with('/') {
             path_text.push('/');
         }
-        imp.path_entry.set_text(&path_text);
+        // Switch to the entry pane first — set_text fires
+        // connect_changed which immediately tries to anchor the
+        // suggestions popover. If the entry isn't realised yet
+        // (still showing crumbs) the popover ends up at coordinate
+        // (0,0) of the breadcrumb bar instead of below the entry.
         imp.mode_stack.set_visible_child_name("entry");
+        imp.path_entry.set_text(&path_text);
         imp.path_entry.select_region(0, -1);
         imp.path_entry.grab_focus();
     }
@@ -280,6 +285,10 @@ pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
+    // Hidden directories (.cache, .config, …) clutter typical home-dir
+    // suggestions. Surface them only when the user has explicitly
+    // typed a leading dot in the partial.
+    let show_hidden = partial.starts_with('.');
     let mut matches: Vec<(String, bool)> = Vec::new();
     for ent in entries.flatten() {
         let name = match ent.file_name().into_string() {
@@ -287,6 +296,9 @@ pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
             Err(_) => continue,
         };
         if !partial.is_empty() && !name.starts_with(&partial) {
+            continue;
+        }
+        if !show_hidden && name.starts_with('.') {
             continue;
         }
         // metadata() follows symlinks so dir-symlinks count as dirs.
