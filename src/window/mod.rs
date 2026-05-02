@@ -784,7 +784,7 @@ impl WrenWindow {
         file_section.append(Some("Rename"), Some("win.rename"));
         file_section.append(Some("Create Link"), Some("win.create-link"));
         file_section.append(Some("Add to Bookmarks"), Some("win.add-bookmark"));
-        file_section.append(Some("Copy Path"), Some("win.copy-path"));
+        file_section.append(Some("Copy Location"), Some("win.copy-path"));
         file_section.append(Some("Move to Trash"), Some("win.move-to-trash"));
         menu.append_section(None, &file_section);
 
@@ -1584,26 +1584,31 @@ impl WrenWindow {
 
     pub fn update_selection_actions(&self) {
         let has_selection = !self.selected_files().is_empty();
+        let in_trash = self.current_location_is_trash();
+        // open / open-with / delete-permanently still apply inside trash
+        // (deleting a trashed file is the canonical "purge" action). The
+        // rest don't make sense on items already in the bin.
+        self.action_set_enabled("win.open-selection", has_selection);
+        self.action_set_enabled("win.open-with", has_selection);
+        self.action_set_enabled("win.delete-permanently", has_selection);
         for action in &[
-            "win.open-selection",
-            "win.open-with",
             "win.rename",
             "win.move-to-trash",
-            "win.delete-permanently",
             "win.cut",
             "win.copy",
             "win.create-link",
             "win.duplicate",
             "win.batch-rename",
         ] {
-            self.action_set_enabled(action, has_selection);
+            self.action_set_enabled(action, has_selection && !in_trash);
         }
+        // Folder-mutating actions: also disabled when viewing trash.
+        self.action_set_enabled("win.new-folder", !in_trash);
         let has_clipboard = self.imp().clipboard_files.borrow().is_some();
-        self.action_set_enabled("win.paste", has_clipboard);
+        self.action_set_enabled("win.paste", has_clipboard && !in_trash);
         // Restore needs in-trash AND a selection; Empty Trash is always
         // available — it lives in the hamburger menu and the sidebar Trash
         // row, with its own confirmation dialog before doing anything.
-        let in_trash = self.current_location_is_trash();
         self.action_set_enabled("win.restore-from-trash", in_trash && has_selection);
         self.action_set_enabled("win.empty-trash", true);
         self.update_status_bar();
@@ -1743,24 +1748,29 @@ impl WrenWindow {
     }
 
     pub fn copy_path(&self) {
-        let path = self
+        // Selected file's path → falling back to its URI for non-local
+        // files (trash:///, sftp://, etc.) → falling back to the current
+        // directory's path/URI when nothing is selected. Previously
+        // skipped step 2 and silently copied the parent dir's path
+        // when run on a trash entry.
+        let location = |f: &gio::File| {
+            f.path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| f.uri().to_string())
+        };
+        let text = self
             .selected_files()
             .into_iter()
             .next()
-            .and_then(|f| f.path())
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|f| location(&f))
             .or_else(|| {
                 let idx = self.current_tab_index()?;
                 let tabs = self.imp().tabs.borrow();
-                tabs.get(idx)?
-                    .navigation
-                    .current()?
-                    .path()
-                    .map(|p| p.to_string_lossy().into_owned())
+                tabs.get(idx)?.navigation.current().map(location)
             });
-        if let Some(path) = path {
-            self.clipboard().set_text(&path);
-            self.show_toast("Path copied to clipboard");
+        if let Some(text) = text {
+            self.clipboard().set_text(&text);
+            self.show_toast("Location copied to clipboard");
         }
     }
 
