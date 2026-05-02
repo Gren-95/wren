@@ -52,11 +52,10 @@ impl ObjectImpl for WrenBreadcrumbBar {
         popover.set_has_arrow(false);
         popover.add_css_class("wren-suggest-popover");
         // Pull the popover up so its top edge butts directly against
-        // the entry's bottom edge — combined with the matching
-        // squared-off corners, the seam disappears. The exact offset
-        // depends on theme padding around the popover's contents;
-        // 6px works for the default Adwaita / libadwaita stack.
-        popover.set_offset(0, -6);
+        // the entry's bottom edge. The default Adwaita popover gap
+        // varies with theme padding; -10 closes it on libadwaita 1.6
+        // / GTK 4.18 without overlapping into the entry.
+        popover.set_offset(0, -10);
         // The popover's default focus dance pulls focus away from the
         // entry on `popup()`. Disabling it keeps the cursor in the
         // entry while the popover surfaces.

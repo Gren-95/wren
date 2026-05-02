@@ -77,10 +77,12 @@ button.wren-current-crumb:hover {
 /* Path entry (Ctrl+L / clicking current crumb) — pill-shaped, like
    YouTube's search input. The bottom half goes square only while the
    suggestions popover is showing so the entry + dropdown read as one
-   capsule that grows downward. */
+   capsule that grows downward. Background matches the popover so
+   they share one continuous fill. */
 .wren-path-entry {
   border-radius: 9999px;
   padding: 5px 14px;
+  background-color: @view_bg_color;
 }
 .wren-path-entry.wren-path-entry-open {
   border-radius: 9999px 9999px 0 0;
@@ -191,15 +193,41 @@ button.wren-sidebar-toggle:hover {
 }
 
 /* ── Path-suggestion popover ──────────────────────────────────────────────
-   YouTube-style attached dropdown. Square top (joins the entry),
-   pill-radius bottom corners (~20px). 8px vertical padding, rows go
-   edge-to-edge. */
+   YouTube-style attached dropdown. The default Adwaita popover
+   styling (rounded corners, top shadow, internal padding) breaks the
+   merged-capsule look, so we override aggressively:
+     - Reset the popover wrapper itself (no margin / shadow).
+     - Restyle `> contents` to have square top, pill-radius bottom,
+       no top border, downward-only shadow.
+     - Match the entry's background colour so the seam disappears.
+   Rows are edge-to-edge with hover / selected fills covering the
+   full row width. */
+.wren-suggest-popover {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
 .wren-suggest-popover > contents {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
   border-bottom-left-radius: 20px;
   border-bottom-right-radius: 20px;
   padding: 8px 0;
+  background-color: @view_bg_color;
+  color: @view_fg_color;
+  /* Drop-shadow only below + to the sides — no top so the join with
+     the entry is clean. */
+  box-shadow:
+    0 4px 12px alpha(black, 0.18),
+    0 1px 4px alpha(black, 0.08);
+  /* No border at all — the entry already has its own outline; a
+     popover border on top of that produces a visible double line. */
+  border: none;
+}
+.wren-suggest-list,
+.wren-suggest-list > row {
+  background: transparent;
 }
 .wren-suggest-list > row {
   border-radius: 0;
