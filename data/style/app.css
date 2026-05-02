@@ -216,13 +216,10 @@ button.wren-sidebar-toggle:hover {
   padding: 8px 0;
   background-color: @view_bg_color;
   color: @view_fg_color;
-  /* Drop-shadow only below + to the sides — no top so the join with
-     the entry is clean. */
-  box-shadow:
-    0 4px 12px alpha(black, 0.18),
-    0 1px 4px alpha(black, 0.08);
-  /* No border at all — the entry already has its own outline; a
-     popover border on top of that produces a visible double line. */
+  /* No shadow — the wrapper popover is supposed to read as a
+     continuation of the entry, not as a floating card. Without a
+     shadow the dropdown looks attached rather than hovering. */
+  box-shadow: none;
   border: none;
 }
 .wren-suggest-list,
