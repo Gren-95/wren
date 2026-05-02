@@ -23,17 +23,19 @@ fn main() -> glib::ExitCode {
 //     Long-standing GTK4 quirk observed in every GTK4 file manager —
 //     fires during initial layout of ellipsizing GtkLabels.
 //
-//   "still has children left: GtkPopoverMenu"
-//     Fires at app shutdown from sidebar row popovers. Each sidebar
-//     row owns its own context-menu PopoverMenu and they would all
-//     need a deterministic unparent point that doesn't misfire on
-//     mid-session sidebar rebuilds. The file-view popovers are now
-//     cleaned up properly in dispose — this filter only covers the
-//     sidebar case.
+//   "...but it still has children left:" + "   - GtkPopoverMenu ..."
+//     Two separate g_warning() calls — one per parent and one per
+//     child — emitted at app shutdown from sidebar row popovers. Each
+//     sidebar row owns its own context-menu PopoverMenu and they
+//     would all need a deterministic unparent point that doesn't
+//     misfire on mid-session sidebar rebuilds. File-view popovers
+//     are now cleaned up properly in dispose, so this filter only
+//     covers the sidebar case.
 fn install_log_filter() {
-    let dropped = [
+    let dropped: &[&str] = &[
         "reported min width",
-        "still has children left: GtkPopoverMenu",
+        "still has children left",
+        "- GtkPopoverMenu",
     ];
     glib::log_set_writer_func(move |level, fields| {
         for field in fields {
