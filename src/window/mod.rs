@@ -1267,17 +1267,23 @@ impl WrenWindow {
     #[allow(deprecated)]
     pub fn open_with(&self) {
         let objs = self.selected_file_objects();
-        let Some(obj) = objs.first() else { return };
+        let Some(obj) = objs.first() else {
+            crate::wren_log!("open_with: no selection");
+            return;
+        };
         if obj.is_directory() {
+            crate::wren_log!("open_with: skipping directory");
             return;
         }
         let content_type = obj.content_type();
+        crate::wren_log!("open_with: content_type={content_type:?}");
         if content_type.is_empty() {
             self.show_toast("Unknown file type");
             return;
         }
 
         let apps = gio::AppInfo::all_for_type(&content_type);
+        crate::wren_log!("open_with: {} apps available", apps.len());
         if apps.is_empty() {
             self.show_toast("No applications available for this file type");
             return;
@@ -1385,6 +1391,7 @@ impl WrenWindow {
             ),
         );
 
+        crate::wren_log!("open_with: presenting dialog");
         dialog.present(Some(self));
     }
 
