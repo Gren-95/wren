@@ -1273,34 +1273,119 @@ impl WrenWindow {
         }
         let content_type = obj.content_type();
         if content_type.is_empty() {
+            self.show_toast("Unknown file type");
             return;
         }
 
-        let dialog = gtk4::AppChooserDialog::for_content_type(
-            Some(self),
-            gtk4::DialogFlags::MODAL | gtk4::DialogFlags::DESTROY_WITH_PARENT,
-            &content_type,
+        let apps = gio::AppInfo::all_for_type(&content_type);
+        if apps.is_empty() {
+            self.show_toast("No applications available for this file type");
+            return;
+        }
+        let default = gio::AppInfo::default_for_type(&content_type, false);
+
+        // Build the picker manually — GtkAppChooserDialog has been
+        // deprecated since GTK 4.10 and is non-functional on 4.18+.
+        let dialog = adw::AlertDialog::new(
+            Some("Open With"),
+            Some(&format!(
+                "Choose an application to open the {} file{}",
+                objs.len(),
+                if objs.len() == 1 { "" } else { "s" },
+            )),
         );
+
+        let list = gtk4::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk4::SelectionMode::Single);
+
+        let mut default_idx: Option<i32> = None;
+        for (i, app) in apps.iter().enumerate() {
+            let row = adw::ActionRow::new();
+            row.set_title(app.display_name().as_str());
+            if let Some(desc) = app.description() {
+                row.set_subtitle(desc.as_str());
+            }
+            if let Some(icon) = app.icon() {
+                let img = gtk4::Image::from_gicon(&icon);
+                img.set_pixel_size(32);
+                row.add_prefix(&img);
+            }
+            row.set_activatable(true);
+            list.append(&row);
+            if let Some(d) = &default {
+                if app.id() == d.id() {
+                    default_idx = Some(i as i32);
+                }
+            }
+        }
+        if let Some(idx) = default_idx {
+            if let Some(row) = list.row_at_index(idx) {
+                list.select_row(Some(&row));
+            }
+        } else if let Some(row) = list.row_at_index(0) {
+            list.select_row(Some(&row));
+        }
+
+        let scroll = gtk4::ScrolledWindow::new();
+        scroll.set_min_content_height(280);
+        scroll.set_max_content_height(420);
+        scroll.set_propagate_natural_height(true);
+        scroll.set_child(Some(&list));
+        dialog.set_extra_child(Some(&scroll));
+
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("open", "Open");
+        dialog.set_response_appearance("open", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("open"));
+        dialog.set_close_response("cancel");
+
         let files: Vec<gio::File> = objs.iter().map(|o| o.file().clone()).collect();
-        dialog.connect_response(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |dialog, response| {
-                if response == gtk4::ResponseType::Ok {
-                    if let Some(app_info) = dialog.app_info() {
-                        let uris: Vec<_> = files.iter().map(|f| f.uri()).collect();
-                        let uri_strs: Vec<&str> = uris.iter().map(|u| u.as_str()).collect();
-                        if let Err(e) =
-                            app_info.launch_uris(&uri_strs, gio::AppLaunchContext::NONE)
-                        {
-                            window.show_toast(&format!("Cannot open: {e}"));
-                        }
+
+        // The launcher takes a row index and runs the open. Shared by the
+        // "Open" button (via connect_response) and double-click / Enter on
+        // a row. AdwAlertDialog has no programmatic-response API, so the
+        // row-activation path closes the dialog itself.
+        let launch = {
+            let apps = apps.clone();
+            let files = files.clone();
+            glib::clone!(
+                #[weak(rename_to = window)] self,
+                #[upgrade_or] (),
+                move |idx: usize| {
+                    let Some(app) = apps.get(idx) else { return };
+                    let uris: Vec<_> = files.iter().map(|f| f.uri()).collect();
+                    let uri_strs: Vec<&str> = uris.iter().map(|u| u.as_str()).collect();
+                    if let Err(e) = app.launch_uris(&uri_strs, gio::AppLaunchContext::NONE) {
+                        window.show_toast(&format!("Cannot open: {e}"));
                     }
                 }
+            )
+        };
+
+        list.connect_row_activated(glib::clone!(
+            #[weak] dialog,
+            #[strong] launch,
+            move |_, row| {
+                launch(row.index() as usize);
                 dialog.close();
             }
         ));
-        dialog.present();
+
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak] list,
+                #[strong] launch,
+                move |_, response| {
+                    if response != "open" { return };
+                    let Some(row) = list.selected_row() else { return };
+                    launch(row.index() as usize);
+                }
+            ),
+        );
+
+        dialog.present(Some(self));
     }
 
     pub fn focus_location(&self) {
