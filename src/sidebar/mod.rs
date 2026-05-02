@@ -217,12 +217,9 @@ impl WrenSidebar {
         let popover = gtk4::PopoverMenu::from_model(Some(&menu));
         popover.set_has_arrow(false);
         popover.set_parent(row);
-        // Detach the popover when the row is being torn down so it
-        // doesn't show up as a leftover child during finalize.
-        row.connect_unrealize(glib::clone!(
-            #[strong] popover,
-            move |_| popover.unparent()
-        ));
+        // The shutdown "leftover children" warning is filtered in
+        // main::install_log_filter; unparenting at unrealize would
+        // misfire when the sidebar list rebuilds.
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(move |_, _, x, y| {

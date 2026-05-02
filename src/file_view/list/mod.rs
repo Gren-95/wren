@@ -309,12 +309,11 @@ impl WrenFileList {
         let popover = gtk4::PopoverMenu::from_model(Some(menu));
         popover.set_has_arrow(false);
         popover.set_parent(&imp.list_view);
-        // Detach the popover when the view is being torn down so it
-        // doesn't show up as a leftover child during finalize.
-        imp.list_view.connect_unrealize(glib::clone!(
-            #[strong] popover,
-            move |_| popover.unparent()
-        ));
+        // The popover is intentionally not unparented at any deterministic
+        // point — connecting unrealize would fire on stack-page hide
+        // (grid↔list switch) and detach mid-session. The "leftover
+        // children" warning that GTK emits at app dispose is filtered
+        // in main::install_log_filter.
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(move |_, _, x, y| {

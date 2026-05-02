@@ -17,18 +17,30 @@ fn main() -> glib::ExitCode {
 }
 
 // Drop a small set of known-harmless GTK4 warnings before they reach
-// the default writer. The "reported min width -3" warning fires when
-// ellipsizing GtkLabels are measured in a context that hasn't laid out
-// fonts yet — a long-standing GTK4 quirk filed upstream and observed
-// in every GTK4 file manager. Filtering by exact substring keeps real
-// warnings visible.
+// the default writer. Filtering is purely by substring so genuine
+// problems still surface.
+//
+//   "reported min width -3, but sizes must be >= 0"
+//     Fired during initial layout of ellipsizing GtkLabels — a
+//     long-standing GTK4 quirk observed in every GTK4 file manager.
+//
+//   "Finalizing ..., but it still has children left: GtkPopoverMenu"
+//     Fires only at app dispose. PopoverMenus parented to file
+//     views / sidebar rows would be unparented if we connected to
+//     unrealize, but unrealize misfires on stack-page hides
+//     (grid↔list view switch) and on sidebar rebuilds — detaching
+//     mid-session and breaking subsequent right-clicks.
 fn install_log_filter() {
-    glib::log_set_writer_func(|level, fields| {
+    let dropped = [
+        "reported min width",
+        "still has children left: GtkPopoverMenu",
+    ];
+    glib::log_set_writer_func(move |level, fields| {
         for field in fields {
             if field.key() == "MESSAGE"
                 && field
                     .value_str()
-                    .is_some_and(|s| s.contains("reported min width") && s.contains("but sizes must be >= 0"))
+                    .is_some_and(|s| dropped.iter().any(|needle| s.contains(needle)))
             {
                 return glib::LogWriterOutput::Handled;
             }

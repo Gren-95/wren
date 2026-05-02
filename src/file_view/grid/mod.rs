@@ -360,12 +360,9 @@ impl WrenFileGrid {
         let popover = gtk4::PopoverMenu::from_model(Some(menu));
         popover.set_has_arrow(false);
         popover.set_parent(&imp.grid_view);
-        // Detach the popover when the view is being torn down so it
-        // doesn't show up as a leftover child during finalize.
-        imp.grid_view.connect_unrealize(glib::clone!(
-            #[strong] popover,
-            move |_| popover.unparent()
-        ));
+        // See comment in WrenFileList::setup_context_menu for why we
+        // don't unparent at unrealize. The shutdown warning is filtered
+        // in main::install_log_filter.
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(move |_, _, x, y| {
