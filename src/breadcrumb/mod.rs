@@ -172,7 +172,7 @@ impl WrenBreadcrumbBar {
         // Prefer the local path; for virtual filesystems (trash:///, recent:///,
         // sftp://…) f.path() is None — fall back to the full URI so the user
         // can see and copy the location.
-        let path_text = imp
+        let mut path_text = imp
             .current_location
             .borrow()
             .as_ref()
@@ -182,6 +182,12 @@ impl WrenBreadcrumbBar {
                     .unwrap_or_else(|| f.uri().to_string())
             })
             .unwrap_or_default();
+        // Append a trailing "/" so the suggestions popover lists the
+        // contents of the current directory rather than the directory
+        // itself as a self-match. Skip for URIs that already end in /.
+        if path_text.starts_with('/') && !path_text.ends_with('/') {
+            path_text.push('/');
+        }
         imp.path_entry.set_text(&path_text);
         imp.mode_stack.set_visible_child_name("entry");
         imp.path_entry.select_region(0, -1);
@@ -246,12 +252,15 @@ fn friendly_name_for(file: &gio::File) -> String {
         .unwrap_or_else(|| "/".to_string())
 }
 
-// Returns up to `limit` matching entries from the parent of the path
-// in `raw`, sorted alphabetically. Empty when the path doesn't refer
-// to a real local parent dir (relative paths, URIs, missing parents).
+// Returns up to `limit` matching directory entries from the parent of
+// the path in `raw`, sorted alphabetically. Empty when the path
+// doesn't refer to a real local parent dir (relative paths, URIs,
+// missing parents).
 //
-// Each match is `(basename, is_dir)`; `is_dir` is true for both real
-// directories and symlinks (which we follow for autocompletion).
+// Files are intentionally excluded — the path entry navigates folders,
+// so suggesting a file would lead nowhere useful. Symlinks are
+// resolved through metadata() (vs symlink_metadata()) so directory
+// symlinks still appear as suggestions.
 pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
     let expanded = expand_tilde(raw);
     if !expanded.starts_with('/') {
@@ -280,11 +289,10 @@ pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
         if !partial.is_empty() && !name.starts_with(&partial) {
             continue;
         }
-        let is_dir = ent
-            .file_type()
-            .map(|t| t.is_dir() || t.is_symlink())
-            .unwrap_or(false);
-        matches.push((name, is_dir));
+        // metadata() follows symlinks so dir-symlinks count as dirs.
+        let Ok(meta) = ent.path().metadata() else { continue };
+        if !meta.is_dir() { continue; }
+        matches.push((name, true));
     }
     matches.sort_by(|a, b| a.0.cmp(&b.0));
     matches.truncate(limit);
