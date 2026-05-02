@@ -5,21 +5,25 @@ A GTK4/libadwaita file manager written in Rust, inspired by GNOME Nautilus.
 ## Features
 
 - **Icon grid and list views** — switchable per tab, with virtual scrolling for large directories
-- **Thumbnails** — displays pre-generated thumbnails from the system cache with GPU-resident texture caching
-- **Zoom** — Ctrl+scroll or Ctrl+±/0 to resize icons (32 → 48 → 64 → 96 → 128 px)
-- **Tabs** — each tab has independent navigation history, sort state, and view mode
-- **Breadcrumb bar** — click any ancestor to jump to it; Ctrl+L to type a path directly
-- **Sidebar** — Places (Home, Documents, Downloads, Music, Pictures, Videos, Trash) plus user bookmarks from `~/.config/gtk-3.0/bookmarks`
+- **Thumbnails** — pre-generated from the system cache, GPU-resident texture caching keeps them in VRAM across scroll
+- **Zoom** — Ctrl+scroll or Ctrl+±/0 (32 → 48 → 64 → 96 → 128 px)
+- **Tabs** — each with independent navigation history, sort state, and view mode
+- **Breadcrumb bar** — click any ancestor to jump; Ctrl+L for direct path entry (`~` and any URI scheme accepted)
+- **Sidebar** — Places, GTK bookmarks (`~/.config/gtk-3.0/bookmarks`), and mounted volumes; right-click for Open in New Tab / Window / Terminal, Copy Location, Empty Trash
+- **Drag and drop** — into folder cells, onto sidebar bookmarks / volumes / Trash, onto breadcrumb ancestors; folders highlight on hover; cell snapshot used as drag cursor
+- **Trash management** — Empty Trash from anywhere, Restore From Trash via `trash::orig-path` xattr
+- **File operation progress** — header-bar popover with per-op cards: progress bar, current file, source / destination paths, MB/s, ETA, elapsed timer, per-op cancel; desktop notification for ops over 30 s
+- **Conflict resolution** — Skip / Replace / Rename / Cancel dialog with "apply to all" on paste and drop collisions
 - **Sort** — by name, size, date modified, or type; reversible; per-tab state
 - **Search** — Ctrl+F filters by filename; toggle hidden files with Ctrl+H
-- **File operations** — copy, cut, paste, rename, move to trash, permanent delete, new folder, create symlink
-- **Batch rename** — find-and-replace across multiple selected files
-- **Undo/redo** — for rename and new folder (Ctrl+Z / Ctrl+Shift+Z)
-- **Drag and drop** — exports `text/uri-list` for dropping into other apps
-- **Open in terminal** — auto-detects kitty, GNOME Terminal, Konsole, Alacritty, and others; configurable in Settings
-- **Open With** — choose an application for any file type
-- **Properties** — file type, size, and location
-- **Live directory monitoring** — folder contents update automatically on external changes
+- **File operations** — copy, cut, paste, duplicate, rename, batch rename, move to trash, permanent delete, new folder, create symlink; symlinks preserved as symlinks across copy
+- **Properties** — file type, location, size; live recursive size walk for directories with cancel
+- **Undo / redo** — for rename and new folder (Ctrl+Z / Ctrl+Shift+Z)
+- **Open in Terminal** — auto-detects kitty, GNOME Terminal, Konsole, Alacritty, and others; custom command in Settings
+- **Open With** — application picker for any file type
+- **Live monitoring** — folder contents update automatically on external changes; multiple tabs at the same folder stay in sync
+- **Persistence** — window size + maximized state, sidebar visibility, last visited directory, theme, view mode, sort, zoom, hidden-files toggle all survive restart
+- **stderr op logging** — every destructive operation prints to stderr (run from terminal to see what's happening)
 - **Keyboard-driven** — Nautilus-compatible shortcuts throughout
 
 ## Screenshots
@@ -76,7 +80,9 @@ wren
 |--------|----------|
 | Navigate back / forward | Alt+Left / Alt+Right |
 | Navigate up | Alt+Up |
-| New tab | Ctrl+T |
+| Navigate home | Alt+Home |
+| Reload | F5 |
+| New tab / new window | Ctrl+T / Ctrl+N |
 | Close tab | Ctrl+W |
 | Focus path bar | Ctrl+L |
 | Toggle search | Ctrl+F |
@@ -93,8 +99,9 @@ wren
 | Zoom in / out / reset | Ctrl+= / Ctrl+- / Ctrl+0 |
 | Properties | Alt+Enter |
 | Add bookmark | Ctrl+D |
-| Create link | *(context menu)* |
 | Open with | Ctrl+Shift+O |
+| Show shortcuts | Ctrl+? |
+| Duplicate / Create link | *(context menu)* |
 
 ## License
 
