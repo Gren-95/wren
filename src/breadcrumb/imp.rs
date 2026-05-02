@@ -232,6 +232,21 @@ impl WrenBreadcrumbBar {
         let Some(list) = self.suggest_list.borrow().clone() else { return };
         let Some(popover) = self.suggest_popover.borrow().clone() else { return };
 
+        // Match the popover's content width to the entry's so it sits
+        // flush under the bar like a YouTube-style search dropdown.
+        // entry.width() is 0 before the entry is realized, in which
+        // case we leave the previous (or fallback) width alone.
+        let entry_width = entry.width();
+        if entry_width > 0 {
+            if let Some(scroll) = popover
+                .child()
+                .and_then(|c| c.downcast::<gtk4::ScrolledWindow>().ok())
+            {
+                scroll.set_min_content_width(entry_width);
+                scroll.set_max_content_width(entry_width);
+            }
+        }
+
         let raw = entry.text().to_string();
         let matches = super::list_completions(&raw, 50);
 
