@@ -1275,6 +1275,28 @@ impl WrenWindow {
         btn_box.append(&dark_btn);
         scheme_row.add_suffix(&btn_box);
         appearance_group.add(&scheme_row);
+
+        // Animations toggle. Drives gtk-enable-animations app-wide:
+        // sidebar slide, popover fade, banner reveal, etc.
+        let anim_row = adw::SwitchRow::new();
+        anim_row.set_title("Animations");
+        anim_row.set_subtitle("Sidebar slide, popover fade, banner reveal");
+        let initial_anim = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.animations_enabled())
+            .unwrap_or(true);
+        anim_row.set_active(initial_anim);
+        anim_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_animations_enabled(row.is_active());
+                }
+            }
+        ));
+        appearance_group.add(&anim_row);
         page.add(&appearance_group);
 
         // Terminal group

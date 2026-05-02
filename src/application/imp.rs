@@ -20,6 +20,7 @@ pub struct WrenApplication {
     pub sidebar_visible: Cell<bool>,
     pub last_directory: RefCell<String>,
     pub color_scheme: RefCell<String>,
+    pub animations_enabled: Cell<bool>,
 }
 
 impl Default for WrenApplication {
@@ -38,6 +39,7 @@ impl Default for WrenApplication {
             sidebar_visible: Cell::new(true),
             last_directory: RefCell::new(String::new()),
             color_scheme: RefCell::new("default".to_string()),
+            animations_enabled: Cell::new(true),
         }
     }
 }
@@ -93,6 +95,9 @@ impl WrenApplication {
             if let Ok(v) = kf.string("General", "last_directory") {
                 *self.last_directory.borrow_mut() = v.to_string();
             }
+            if let Ok(v) = kf.boolean("Appearance", "animations") {
+                self.animations_enabled.set(v);
+            }
             if let Ok(v) = kf.string("Appearance", "color_scheme") {
                 let s = v.to_string();
                 if matches!(s.as_str(), "default" | "light" | "dark") {
@@ -122,6 +127,7 @@ impl WrenApplication {
         kf.set_boolean("Window", "sidebar_visible", self.sidebar_visible.get());
         kf.set_string("General", "last_directory", &self.last_directory.borrow());
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
+        kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }
@@ -162,6 +168,14 @@ impl ApplicationImpl for WrenApplication {
             _       => adw::ColorScheme::Default,
         };
         adw::StyleManager::default().set_color_scheme(scheme);
+
+        // Honour the persisted animations preference on startup. GTK's
+        // gtk-enable-animations governs every transition app-wide
+        // (sidebar slide, popover fade, banner reveal, …).
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::Settings::for_display(&display)
+                .set_gtk_enable_animations(self.animations_enabled.get());
+        }
 
         let provider = gtk4::CssProvider::new();
         provider.load_from_resource("/io/github/wren/style/app.css");

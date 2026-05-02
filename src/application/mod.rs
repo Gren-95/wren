@@ -76,4 +76,16 @@ impl WrenApplication {
         *self.imp().last_directory.borrow_mut() = uri.to_string();
         self.imp().save_settings();
     }
+
+    pub fn animations_enabled(&self) -> bool { self.imp().animations_enabled.get() }
+    pub fn set_animations_enabled(&self, v: bool) {
+        self.imp().animations_enabled.set(v);
+        // Apply to the running display immediately — the change is
+        // visible on the very next animation (sidebar toggle, popover, …)
+        // without restarting the app.
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::Settings::for_display(&display).set_gtk_enable_animations(v);
+        }
+        self.imp().save_settings();
+    }
 }
