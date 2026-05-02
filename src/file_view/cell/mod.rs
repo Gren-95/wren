@@ -145,26 +145,19 @@ impl WrenFileCell {
             }
         }
 
-        let base_icon: Option<gio::Icon> = file_obj.icon().or_else(|| {
-            Some(gio::ThemedIcon::new(if file_obj.is_directory() {
-                "folder-symbolic"
-            } else {
-                "text-x-generic-symbolic"
-            }).upcast::<gio::Icon>())
-        });
-        if let Some(icon) = base_icon {
-            // Symlink emblem badge — Adwaita's emblem-symbolic-link
-            // gets composited at the bottom-right of the base icon
-            // by GtkImage's emblemed-icon support.
-            let final_icon: gio::Icon = if file_obj.is_symlink() {
-                let emblem_icon = gio::ThemedIcon::new("emblem-symbolic-link");
-                let emblem = gio::Emblem::new(&emblem_icon);
-                gio::EmblemedIcon::new(&icon, Some(&emblem)).upcast()
-            } else {
-                icon
-            };
-            imp.icon.set_from_gicon(&final_icon);
+        if let Some(icon) = file_obj.icon() {
+            imp.icon.set_from_gicon(&icon);
+        } else if file_obj.is_directory() {
+            imp.icon.set_icon_name(Some("folder-symbolic"));
+        } else {
+            imp.icon.set_icon_name(Some("text-x-generic-symbolic"));
         }
+        // Symlink badge: GtkImage's GEmblemedIcon support is unreliable
+        // at small icon sizes (it composites a 16px emblem on a 24px
+        // base image which often comes out invisible). We instead
+        // overlay our own small GtkImage at the icon's bottom-right
+        // and toggle its visibility — far more reliable.
+        imp.symlink_badge.set_visible(file_obj.is_symlink());
     }
 
     pub fn bound_file_object(&self) -> Option<FileObject> {

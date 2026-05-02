@@ -57,23 +57,16 @@ impl WrenFileRow {
             imp.modified.set_label(&format_modified(ts));
         }
 
-        let base_icon: Option<gio::Icon> = file_obj.icon().or_else(|| {
-            Some(gio::ThemedIcon::new(if file_obj.is_directory() {
-                "folder-symbolic"
-            } else {
-                "text-x-generic-symbolic"
-            }).upcast::<gio::Icon>())
-        });
-        if let Some(icon) = base_icon {
-            let final_icon: gio::Icon = if file_obj.is_symlink() {
-                let emblem_icon = gio::ThemedIcon::new("emblem-symbolic-link");
-                let emblem = gio::Emblem::new(&emblem_icon);
-                gio::EmblemedIcon::new(&icon, Some(&emblem)).upcast()
-            } else {
-                icon
-            };
-            imp.icon.set_from_gicon(&final_icon);
+        if let Some(icon) = file_obj.icon() {
+            imp.icon.set_from_gicon(&icon);
+        } else if file_obj.is_directory() {
+            imp.icon.set_icon_name(Some("folder-symbolic"));
+        } else {
+            imp.icon.set_icon_name(Some("text-x-generic-symbolic"));
         }
+        // See cell::bind for why we use a manual overlay badge
+        // instead of EmblemedIcon.
+        imp.symlink_badge.set_visible(file_obj.is_symlink());
 
         // Hover tooltip = full path (URI fallback for non-local files).
         let tooltip = file_obj

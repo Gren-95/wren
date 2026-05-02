@@ -22,6 +22,17 @@ gridview > child {
   opacity: 0.5;
 }
 
+/* Small symbolic-link emblem overlaid at the icon's bottom-right.
+   The white circle backdrop guarantees the arrow stays legible on
+   any icon (dark thumbnails, busy artwork, …). */
+.wren-symlink-badge {
+  background-color: @view_bg_color;
+  border-radius: 9999px;
+  padding: 1px;
+  margin: 1px;
+  -gtk-icon-size: 16px;
+}
+
 /* ── Breadcrumb bar ──────────────────────────────────────────────────────── */
 
 .wren-crumb-scroll,

@@ -12,6 +12,8 @@ pub struct WrenFileCell {
     pub icon: TemplateChild<gtk4::Image>,
     #[template_child]
     pub name: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub symlink_badge: TemplateChild<gtk4::Image>,
 
     // Kept across unbind/bind so set_icon_size can re-render without a model signal.
     pub bound_file: std::cell::RefCell<Option<FileObject>>,

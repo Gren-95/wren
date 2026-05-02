@@ -449,24 +449,19 @@ impl WrenFileGrid {
         None
     }
 
-    /// Wire middle-click and Ctrl+left-click to open the targeted item in
-    /// a new tab. Picks the cell at the click coordinates and walks up to
-    /// the WrenFileCell to retrieve the bound FileObject.
+    /// Wire middle-click to open the targeted item in a new tab.
+    /// Ctrl+left-click stays bound to GTK's default multi-select
+    /// behaviour — anything else would surprise users coming from
+    /// every other GTK file manager.
     pub fn connect_open_in_tab<F: Fn(&FileObject) + 'static>(&self, f: F) {
         let imp = imp::WrenFileGrid::from_obj(self);
         let f = std::rc::Rc::new(f);
         let gesture = gtk4::GestureClick::new();
-        gesture.set_button(0); // listen on every button
+        gesture.set_button(2);
         gesture.connect_pressed(glib::clone!(
             #[weak(rename_to = gv)] imp.grid_view,
             #[strong] f,
             move |gesture, _, x, y| {
-                let btn = gesture.current_button();
-                let mods = gesture.current_event_state();
-                let is_middle = btn == 2;
-                let is_ctrl_left = btn == 1
-                    && mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
-                if !(is_middle || is_ctrl_left) { return; }
                 let Some(picked) = gv.pick(x, y, gtk4::PickFlags::NON_TARGETABLE) else {
                     return;
                 };

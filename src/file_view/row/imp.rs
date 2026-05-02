@@ -9,6 +9,8 @@ pub struct WrenFileRow {
     #[template_child]
     pub icon: TemplateChild<gtk4::Image>,
     #[template_child]
+    pub symlink_badge: TemplateChild<gtk4::Image>,
+    #[template_child]
     pub name: TemplateChild<gtk4::Label>,
     #[template_child]
     pub content_type: TemplateChild<gtk4::Label>,
