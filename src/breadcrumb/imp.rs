@@ -51,6 +51,12 @@ impl ObjectImpl for WrenBreadcrumbBar {
         popover.set_position(gtk4::PositionType::Bottom);
         popover.set_has_arrow(false);
         popover.add_css_class("wren-suggest-popover");
+        // Pull the popover up so its top edge butts directly against
+        // the entry's bottom edge — combined with the matching
+        // squared-off corners, the seam disappears. The exact offset
+        // depends on theme padding around the popover's contents;
+        // 6px works for the default Adwaita / libadwaita stack.
+        popover.set_offset(0, -6);
         // The popover's default focus dance pulls focus away from the
         // entry on `popup()`. Disabling it keeps the cursor in the
         // entry while the popover surfaces.
@@ -233,9 +239,10 @@ impl WrenBreadcrumbBar {
         let Some(popover) = self.suggest_popover.borrow().clone() else { return };
 
         // Match the popover's content width to the entry's so it sits
-        // flush under the bar like a YouTube-style search dropdown.
-        // entry.width() is 0 before the entry is realized, in which
-        // case we leave the previous (or fallback) width alone.
+        // flush under the bar — entry + dropdown read as one combined
+        // control (datalist / <select> style). entry.width() is 0
+        // before realization; skip in that case and the next
+        // refresh will pick the right width up.
         let entry_width = entry.width();
         if entry_width > 0 {
             if let Some(scroll) = popover
@@ -249,6 +256,16 @@ impl WrenBreadcrumbBar {
 
         let raw = entry.text().to_string();
         let matches = super::list_completions(&raw, 50);
+
+        // Mirror the dropdown's open/closed state on the entry via a
+        // CSS class. The styling squares off the entry's bottom edge
+        // when suggestions are visible so the seam between the two
+        // widgets disappears.
+        if matches.is_empty() {
+            entry.remove_css_class("wren-path-entry-open");
+        } else {
+            entry.add_css_class("wren-path-entry-open");
+        }
 
         // Capture the previously-highlighted name so we can restore the
         // user's selection after rebuild — without this, every
@@ -323,6 +340,7 @@ impl WrenBreadcrumbBar {
         if let Some(popover) = self.suggest_popover.borrow().clone() {
             popover.popdown();
         }
+        self.path_entry.remove_css_class("wren-path-entry-open");
     }
 
     pub fn move_selection(&self, delta: i32) {

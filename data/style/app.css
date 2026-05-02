@@ -74,10 +74,18 @@ button.wren-current-crumb:hover {
   background-color: alpha(@accent_color, 0.25);
 }
 
-/* Path entry (Ctrl+L / clicking current crumb) */
+/* Path entry (Ctrl+L / clicking current crumb) — moderate rounded
+   rectangle (rather than a full pill) so the suggestions popover
+   below can attach with matching corners. */
 .wren-path-entry {
-  border-radius: 9999px;
+  border-radius: 8px;
   padding: 5px 10px;
+}
+/* Squared-off bottom while suggestions are showing, so the entry +
+   dropdown read as one combined widget — like an HTML <datalist>. */
+.wren-path-entry.wren-path-entry-open {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 /* Keyboard shortcut labels in the shortcuts dialog */
@@ -185,11 +193,14 @@ button.wren-sidebar-toggle:hover {
 }
 
 /* ── Path-suggestion popover ──────────────────────────────────────────────
-   Lives below the Ctrl+L entry. Rounded rows, subtle hover, accent
-   highlight on the selected row so arrow-key navigation reads
-   without forcing keyboard focus into the row (which would yank it
-   away from the entry). */
-.wren-suggest-popover contents {
+   Visually merged with the Ctrl+L entry above: square top corners,
+   8px bottom corners (matching the entry's static radius), no arrow.
+   Reads as a single combined widget — like an HTML <datalist>. */
+.wren-suggest-popover > contents {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
   padding: 4px;
 }
 .wren-suggest-list > row {
