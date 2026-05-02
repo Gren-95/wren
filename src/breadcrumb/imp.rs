@@ -69,7 +69,7 @@ impl ObjectImpl for WrenBreadcrumbBar {
             completion.set_popup_single_match(true);
 
             let cell = gtk4::CellRendererText::new();
-            cell.set_property("xpad", 6_i32);
+            cell.set_property("xpad", 6_u32);
             completion.pack_start(&cell, false);
             completion.add_attribute(&cell, "text", 0);
 
