@@ -4,8 +4,10 @@ use adw::prelude::*;
 
 use super::WrenWindow;
 use super::file_ops::{
-    OpKind, copy_recursive, delete_recursive, log_err, log_op, pre_walk_total,
+    OpKind, delete_recursive, log_err, log_op, pre_walk_total,
 };
+use gio::Cancellable;
+use gio::prelude::FileExtManual;
 
 impl WrenWindow {
     pub fn move_to_trash(&self) {
@@ -169,90 +171,99 @@ impl WrenWindow {
         dialog.present(Some(self));
     }
 
-    /// Restore selected trash items to their original locations using the
-    /// `trash::orig-path` xattr the trash backend records on each entry.
+    /// Restore selected trash items to their original locations.
+    ///
+    /// Uses `gio::File::move_future` directly: the gvfs trash backend
+    /// implements native move from `trash:///` to `file:///`, so this is
+    /// atomic and avoids the copy+delete round-trip the previous
+    /// implementation needed (which silently failed on cross-device
+    /// trash entries and on directories whose parents had been removed).
     pub fn restore_from_trash(&self) {
         let files = self.selected_files();
         if files.is_empty() { return; }
         let handle = self.op_start(OpKind::Restore);
-        handle.set_item("Counting items…");
+        handle.set_item("Restoring…");
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)] self,
             #[strong] handle,
             async move {
-                // Restore is copy + delete, so totals double.
-                let (total_items, total_bytes) =
-                    pre_walk_total(&files, true, &handle.cancellable).await;
-                handle.set_total(total_items, total_bytes);
-
                 let total = files.len();
                 let succeeded = 'op: {
-                for (idx, file) in files.iter().enumerate() {
-                    if handle.cancellable.is_cancelled() { break 'op false; }
-                    let info = match file
-                        .query_info_future(
-                            "trash::orig-path",
-                            gio::FileQueryInfoFlags::NONE,
-                            glib::Priority::DEFAULT,
-                        )
-                        .await
-                    {
-                        Ok(i) => i,
-                        Err(e) => {
-                            window.show_toast(&format!("Cannot restore: {e}"));
+                    for (idx, file) in files.iter().enumerate() {
+                        if handle.cancellable.is_cancelled() { break 'op false; }
+
+                        let info = match file
+                            .query_info_future(
+                                "trash::orig-path",
+                                gio::FileQueryInfoFlags::NONE,
+                                glib::Priority::DEFAULT,
+                            )
+                            .await
+                        {
+                            Ok(i) => i,
+                            Err(e) => {
+                                log_err("restore (query)", file, None, &e);
+                                window.show_toast(&format!("Cannot read trash entry: {e}"));
+                                continue;
+                            }
+                        };
+                        let Some(orig_bytes) =
+                            info.attribute_byte_string("trash::orig-path")
+                        else {
+                            window.show_toast("Original path unknown for this trash item");
+                            continue;
+                        };
+                        let orig_str = std::str::from_utf8(orig_bytes.as_ref())
+                            .unwrap_or_default();
+                        let dest = gio::File::for_path(std::path::Path::new(orig_str));
+                        let name = file
+                            .basename()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        handle.set_item(&format!("{name} ({} of {total})", idx + 1));
+                        handle.set_paths(file, Some(&dest));
+                        log_op("restore", file, Some(&dest));
+
+                        if dest.query_exists(Cancellable::NONE) {
+                            window.show_toast(&format!(
+                                "Cannot restore {name}: destination already exists"
+                            ));
                             continue;
                         }
-                    };
-                    let Some(orig_path) = info.attribute_byte_string("trash::orig-path") else {
-                        window.show_toast("Original path unknown for this trash item");
-                        continue;
-                    };
-                    let dest = gio::File::for_path(std::path::Path::new(
-                        std::str::from_utf8(orig_path.as_ref()).unwrap_or_default(),
-                    ));
-                    let name = file
-                        .basename()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    handle.set_item(&format!("{name} ({} of {total})", idx + 1));
-                    handle.set_paths(file, Some(&dest));
-                    log_op("restore", file, Some(&dest));
 
-                    if dest.query_exists(gio::Cancellable::NONE) {
-                        window.show_toast(&format!(
-                            "Cannot restore {name}: destination already exists"
-                        ));
-                        continue;
-                    }
-                    if let Err(e) = copy_recursive(
-                        file.clone(),
-                        dest.clone(),
-                        &handle.cancellable,
-                        handle.copy_callback(),
-                    )
-                    .await
-                    {
-                        if !e.matches(gio::IOErrorEnum::Cancelled) {
-                            log_err("restore (copy)", file, Some(&dest), &e);
-                            window.show_toast(&format!("Could not restore: {e}"));
+                        // Recreate missing parent directories so files
+                        // restored after their containing folder was
+                        // removed land back at the original path.
+                        if let Some(parent) = dest.parent() {
+                            if !parent.query_exists(Cancellable::NONE) {
+                                if let Err(e) = parent.make_directory_with_parents(Cancellable::NONE) {
+                                    if !e.matches(gio::IOErrorEnum::Exists) {
+                                        log_err("restore (mkdir)", file, Some(&dest), &e);
+                                        window.show_toast(&format!(
+                                            "Could not restore {name}: {e}"
+                                        ));
+                                        continue;
+                                    }
+                                }
+                            }
                         }
-                        break 'op false;
-                    }
-                    if let Err(e) = delete_recursive(
-                        file.clone(),
-                        &handle.cancellable,
-                        handle.delete_callback(),
-                    )
-                    .await
-                    {
-                        if !e.matches(gio::IOErrorEnum::Cancelled) {
-                            log_err("restore (delete)", file, None, &e);
-                            window.show_toast(&format!("Restored, but trash entry remains: {e}"));
+
+                        let (fut, _progress) = file.move_future(
+                            &dest,
+                            gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
+                            glib::Priority::DEFAULT,
+                        );
+                        if let Err(e) = fut.await {
+                            if !e.matches(gio::IOErrorEnum::Cancelled) {
+                                log_err("restore", file, Some(&dest), &e);
+                                window.show_toast(&format!(
+                                    "Could not restore {name}: {e}"
+                                ));
+                            }
+                            break 'op false;
                         }
-                        break 'op false;
                     }
-                }
-                true
+                    true
                 };
                 if succeeded { handle.mark_succeeded(); }
                 handle.set_fraction(1.0);
