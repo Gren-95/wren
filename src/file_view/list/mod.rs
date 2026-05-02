@@ -529,10 +529,11 @@ mod imp {
                 true,
                 Rc::clone(&self.bound_rows),
             )));
-            // Rubber-band selection disabled: it competes with the per-row
-            // DragSource and shows a brief selection rect when starting a drag
-            // from a selected row. Multi-select via Ctrl/Shift+click.
-            self.list_view.set_enable_rubberband(false);
+            // Rubber-band selection in list view: GTK4 routes drag-from-row
+            // through the DragSource controller without firing rubberband, so
+            // the selection rect only appears when dragging from empty space —
+            // exactly what users expect.
+            self.list_view.set_enable_rubberband(true);
             self.list_view.set_vexpand(true);
             self.list_view.set_hexpand(true);
             self.list_view.set_overflow(gtk4::Overflow::Hidden);

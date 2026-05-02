@@ -42,7 +42,8 @@ impl FileObject {
     pub const QUERY_ATTRS: &'static str =
         "standard::name,standard::display-name,standard::type,standard::icon,\
          standard::content-type,standard::size,standard::is-hidden,\
-         time::modified,access::can-delete,access::can-rename,thumbnail::path";
+         standard::is-symlink,time::modified,access::can-delete,\
+         access::can-rename,thumbnail::path";
 
     pub fn new(file: gio::File, info: gio::FileInfo) -> Self {
         let name = info.display_name().to_string();
@@ -95,5 +96,12 @@ impl FileObject {
         self.file_info()
             .attribute_byte_string("thumbnail::path")
             .map(|gs| std::path::PathBuf::from(gs.as_str()))
+    }
+
+    /// True when the underlying file is a symlink. Driven by
+    /// `standard::is-symlink` (queried via QUERY_ATTRS) — file-views
+    /// use this to overlay a small arrow badge on the icon.
+    pub fn is_symlink(&self) -> bool {
+        self.file_info().is_symlink()
     }
 }

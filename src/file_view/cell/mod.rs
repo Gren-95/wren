@@ -145,12 +145,25 @@ impl WrenFileCell {
             }
         }
 
-        if let Some(icon) = file_obj.icon() {
-            imp.icon.set_from_gicon(&icon);
-        } else if file_obj.is_directory() {
-            imp.icon.set_icon_name(Some("folder-symbolic"));
-        } else {
-            imp.icon.set_icon_name(Some("text-x-generic-symbolic"));
+        let base_icon: Option<gio::Icon> = file_obj.icon().or_else(|| {
+            Some(gio::ThemedIcon::new(if file_obj.is_directory() {
+                "folder-symbolic"
+            } else {
+                "text-x-generic-symbolic"
+            }).upcast::<gio::Icon>())
+        });
+        if let Some(icon) = base_icon {
+            // Symlink emblem badge — Adwaita's emblem-symbolic-link
+            // gets composited at the bottom-right of the base icon
+            // by GtkImage's emblemed-icon support.
+            let final_icon: gio::Icon = if file_obj.is_symlink() {
+                let emblem_icon = gio::ThemedIcon::new("emblem-symbolic-link");
+                let emblem = gio::Emblem::new(&emblem_icon);
+                gio::EmblemedIcon::new(&icon, Some(&emblem)).upcast()
+            } else {
+                icon
+            };
+            imp.icon.set_from_gicon(&final_icon);
         }
     }
 
@@ -172,6 +185,15 @@ impl WrenFileCell {
             strip_extension(&file_obj.name())
         };
         imp.name.set_label(&display_name);
+        // Cell labels ellipsize aggressively at smaller zooms — tooltip
+        // gives the full name on hover. URI fallback for non-local
+        // files (trash:///, sftp:// …).
+        let tooltip = file_obj
+            .file()
+            .path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file_obj.file().uri().to_string());
+        self.set_tooltip_text(Some(&tooltip));
         self.render_icon(file_obj, px);
     }
 

@@ -57,13 +57,31 @@ impl WrenFileRow {
             imp.modified.set_label(&format_modified(ts));
         }
 
-        if let Some(icon) = file_obj.icon() {
-            imp.icon.set_from_gicon(&icon);
-        } else if file_obj.is_directory() {
-            imp.icon.set_icon_name(Some("folder-symbolic"));
-        } else {
-            imp.icon.set_icon_name(Some("text-x-generic-symbolic"));
+        let base_icon: Option<gio::Icon> = file_obj.icon().or_else(|| {
+            Some(gio::ThemedIcon::new(if file_obj.is_directory() {
+                "folder-symbolic"
+            } else {
+                "text-x-generic-symbolic"
+            }).upcast::<gio::Icon>())
+        });
+        if let Some(icon) = base_icon {
+            let final_icon: gio::Icon = if file_obj.is_symlink() {
+                let emblem_icon = gio::ThemedIcon::new("emblem-symbolic-link");
+                let emblem = gio::Emblem::new(&emblem_icon);
+                gio::EmblemedIcon::new(&icon, Some(&emblem)).upcast()
+            } else {
+                icon
+            };
+            imp.icon.set_from_gicon(&final_icon);
         }
+
+        // Hover tooltip = full path (URI fallback for non-local files).
+        let tooltip = file_obj
+            .file()
+            .path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file_obj.file().uri().to_string());
+        self.set_tooltip_text(Some(&tooltip));
     }
 
     pub fn set_icon_size(&self, px: u32) {

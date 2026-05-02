@@ -2115,16 +2115,36 @@ impl WrenWindow {
         let Some(idx) = self.current_tab_index() else {
             return;
         };
-        let (n_total, n_selected, label) = {
+        let (n_total, n_selected, selected_bytes, label) = {
             let tabs = self.imp().tabs.borrow();
             let Some(tab) = tabs.get(idx) else { return };
             let Some(model) = tab.dir_model.as_ref() else { return };
             let n_total = model.selection.n_items();
-            let n_selected = model.selection.selection().size() as u32;
-            (n_total, n_selected, tab.status_bar.clone())
+            let bitset = model.selection.selection();
+            let n_selected = bitset.size() as u32;
+            // Sum the byte size of selected non-directories so the user
+            // can see "you've got 4 GB selected before you trash it".
+            // Skip directories — recursive size walk is too expensive
+            // here; properties dialog still computes those on demand.
+            let mut bytes = 0u64;
+            for i in 0..n_selected {
+                let pos = bitset.nth(i);
+                if let Some(obj) = model.selection.item(pos).and_downcast::<FileObject>() {
+                    if !obj.is_directory() {
+                        bytes = bytes.saturating_add(obj.file_size());
+                    }
+                }
+            }
+            (n_total, n_selected, bytes, tab.status_bar.clone())
         };
         let text = if n_selected == 0 {
             format!("{n_total} item{}", if n_total == 1 { "" } else { "s" })
+        } else if selected_bytes > 0 {
+            format!(
+                "{n_total} item{}, {n_selected} selected ({})",
+                if n_total == 1 { "" } else { "s" },
+                file_ops::format_file_size(selected_bytes),
+            )
         } else {
             format!(
                 "{n_total} item{}, {n_selected} selected",
