@@ -43,19 +43,21 @@ impl ObjectImpl for WrenBreadcrumbBar {
         self.parent_constructed();
         let obj = self.obj();
 
-        // Suggestions popover, modelled on Epiphany's URL-bar
-        // suggestions (src/ephy-location-entry.c + .blp): styled with
-        // .menu and .suggestions, has-arrow disabled, autohide off
-        // (we drive show/hide explicitly so typing doesn't dismiss
-        // it), and parented directly to the entry so positioning is
-        // automatic.
+        // Suggestions popover. We make the popover wrapper itself
+        // fully transparent (no chrome) and put all the visible
+        // styling on an inner Box — this sidesteps Adwaita's
+        // built-in popover theme (rounded corners + shadow +
+        // padding) which made the dropdown look identical to a
+        // right-click menu no matter what we tried to override.
         let popover = gtk4::Popover::new();
         popover.set_autohide(false);
         popover.set_position(gtk4::PositionType::Bottom);
         popover.set_has_arrow(false);
-        popover.add_css_class("menu");
-        popover.add_css_class("suggestions");
+        popover.add_css_class("wren-suggest-popover");
         popover.set_can_focus(false);
+
+        let card = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        card.add_css_class("wren-suggest-card");
 
         let scroll = gtk4::ScrolledWindow::new();
         scroll.set_max_content_height(320);
@@ -66,8 +68,10 @@ impl ObjectImpl for WrenBreadcrumbBar {
         let list = gtk4::ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
         list.set_can_focus(false);
+        list.add_css_class("wren-suggest-list");
         scroll.set_child(Some(&list));
-        popover.set_child(Some(&scroll));
+        card.append(&scroll);
+        popover.set_child(Some(&card));
         popover.set_parent(&*self.path_entry);
 
         // Click on a row → fill the entry with that name and continue.
