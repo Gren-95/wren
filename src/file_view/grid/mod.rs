@@ -357,21 +357,49 @@ impl WrenFileGrid {
 
     pub fn setup_context_menu(&self, menu: &gio::MenuModel) {
         let imp = imp::WrenFileGrid::from_obj(self);
-        let popover = gtk4::PopoverMenu::from_model(Some(menu));
-        popover.set_has_arrow(false);
-        popover.set_parent(&imp.grid_view);
-        // See comment in WrenFileList::setup_context_menu for why we
-        // don't unparent at unrealize. The shutdown warning is filtered
-        // in main::install_log_filter.
+        // Stash the model for use in the gesture handler. We rebuild
+        // the popover on every right-click — the Nautilus pattern —
+        // because reusing a single PopoverMenu across right-clicks
+        // sometimes shows stale submenu state, and parenting to the
+        // outer composite widget (rather than the inner GridView) gives
+        // the popover correct measurement context.
+        imp.context_menu_model.replace(Some(menu.clone()));
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
-        gesture.connect_pressed(move |_, _, x, y| {
-            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
-                x as i32, y as i32, 1, 1,
-            )));
-            popover.popup();
-        });
+        gesture.connect_pressed(glib::clone!(
+            #[weak(rename_to = view)] self,
+            move |_, _, x, y| view.popup_context_menu(x, y)
+        ));
         imp.grid_view.add_controller(gesture);
+    }
+
+    fn popup_context_menu(&self, x: f64, y: f64) {
+        let imp = imp::WrenFileGrid::from_obj(self);
+        let Some(model) = imp.context_menu_model.borrow().clone() else { return };
+        // Drop the previous popover via unparent before building the
+        // new one. Mirrors `g_clear_pointer(&p, gtk_widget_unparent)`.
+        if let Some(old) = imp.context_popover.take() {
+            old.unparent();
+        }
+        let popover = gtk4::PopoverMenu::from_model(Some(&model));
+        popover.set_has_arrow(false);
+        popover.set_parent(self);
+        // The gesture's x,y are in grid_view coordinates; translate
+        // into our own coordinate space because that's what
+        // set_pointing_to expects when parented on `self`.
+        let p = imp
+            .grid_view
+            .compute_point(self, &gtk4::graphene::Point::new(x as f32, y as f32))
+            .unwrap_or_else(|| gtk4::graphene::Point::new(x as f32, y as f32));
+        let (px, py) = (p.x() as f64, p.y() as f64);
+        popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+            px as i32,
+            py as i32,
+            1,
+            1,
+        )));
+        popover.popup();
+        imp.context_popover.replace(Some(popover));
     }
 
     pub fn scroll_to_top(&self) {
@@ -405,6 +433,8 @@ mod imp {
         pub cut_uris: Rc<RefCell<std::collections::HashSet<String>>>,
         pub show_extensions: Cell<bool>,
         pub bound_cells: BoundCells,
+        pub context_menu_model: RefCell<Option<gio::MenuModel>>,
+        pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
     }
 
     impl Default for WrenFileGrid {
@@ -415,6 +445,8 @@ mod imp {
                 cut_uris: Rc::new(RefCell::new(std::collections::HashSet::new())),
                 show_extensions: Cell::new(true),
                 bound_cells: Rc::new(RefCell::new(HashMap::new())),
+                context_menu_model: RefCell::new(None),
+                context_popover: RefCell::new(None),
             }
         }
     }
@@ -483,6 +515,9 @@ mod imp {
         }
 
         fn dispose(&self) {
+            if let Some(popover) = self.context_popover.take() {
+                popover.unparent();
+            }
             self.obj().first_child().map(|child| child.unparent());
         }
     }

@@ -306,23 +306,40 @@ impl WrenFileList {
 
     pub fn setup_context_menu(&self, menu: &gio::MenuModel) {
         let imp = imp::WrenFileList::from_obj(self);
-        let popover = gtk4::PopoverMenu::from_model(Some(menu));
-        popover.set_has_arrow(false);
-        popover.set_parent(&imp.list_view);
-        // The popover is intentionally not unparented at any deterministic
-        // point — connecting unrealize would fire on stack-page hide
-        // (grid↔list switch) and detach mid-session. The "leftover
-        // children" warning that GTK emits at app dispose is filtered
-        // in main::install_log_filter.
+        // See WrenFileGrid::setup_context_menu for rationale on the
+        // rebuild-on-each-click pattern.
+        imp.context_menu_model.replace(Some(menu.clone()));
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
-        gesture.connect_pressed(move |_, _, x, y| {
-            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
-                x as i32, y as i32, 1, 1,
-            )));
-            popover.popup();
-        });
+        gesture.connect_pressed(glib::clone!(
+            #[weak(rename_to = view)] self,
+            move |_, _, x, y| view.popup_context_menu(x, y)
+        ));
         imp.list_view.add_controller(gesture);
+    }
+
+    fn popup_context_menu(&self, x: f64, y: f64) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let Some(model) = imp.context_menu_model.borrow().clone() else { return };
+        if let Some(old) = imp.context_popover.take() {
+            old.unparent();
+        }
+        let popover = gtk4::PopoverMenu::from_model(Some(&model));
+        popover.set_has_arrow(false);
+        popover.set_parent(self);
+        let p = imp
+            .list_view
+            .compute_point(self, &gtk4::graphene::Point::new(x as f32, y as f32))
+            .unwrap_or_else(|| gtk4::graphene::Point::new(x as f32, y as f32));
+        let (px, py) = (p.x() as f64, p.y() as f64);
+        popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+            px as i32,
+            py as i32,
+            1,
+            1,
+        )));
+        popover.popup();
+        imp.context_popover.replace(Some(popover));
     }
 
     pub fn setup_empty_area_click(&self) {
@@ -410,6 +427,8 @@ mod imp {
         pub icon_size: Rc<Cell<u32>>,
         pub bound_rows: BoundRows,
         pub header_icon_spacer: gtk4::Box,
+        pub context_menu_model: RefCell<Option<gio::MenuModel>>,
+        pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
     }
 
     impl Default for WrenFileList {
@@ -422,6 +441,8 @@ mod imp {
                 icon_size: Rc::new(Cell::new(24)),
                 bound_rows: Rc::new(RefCell::new(HashMap::new())),
                 header_icon_spacer: gtk4::Box::new(gtk4::Orientation::Horizontal, 0),
+                context_menu_model: RefCell::new(None),
+                context_popover: RefCell::new(None),
             }
         }
     }
@@ -532,6 +553,9 @@ mod imp {
         }
 
         fn dispose(&self) {
+            if let Some(popover) = self.context_popover.take() {
+                popover.unparent();
+            }
             self.obj().first_child().map(|child| child.unparent());
         }
     }

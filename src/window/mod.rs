@@ -1536,6 +1536,24 @@ impl WrenWindow {
                     }
                 ));
             }
+            undo::UndoOp::Trash { originals } => {
+                glib::spawn_future_local(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    async move {
+                        match window.restore_from_trash_by_orig(&originals).await {
+                            Ok(()) => {
+                                window.imp().redo_stack.borrow_mut().push(
+                                    undo::UndoOp::Trash { originals },
+                                );
+                                window.update_undo_actions();
+                                window.reload();
+                            }
+                            Err(msg) => window.show_toast(&format!("Undo failed: {msg}")),
+                        }
+                    }
+                ));
+            }
         }
     }
 
@@ -1602,6 +1620,25 @@ impl WrenWindow {
                     }
                 ));
             }
+            undo::UndoOp::Trash { originals } => {
+                glib::spawn_future_local(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    async move {
+                        for f in &originals {
+                            log_op("redo trash", f, None);
+                            let _ = f.trash_future(glib::Priority::DEFAULT).await;
+                        }
+                        window
+                            .imp()
+                            .undo_stack
+                            .borrow_mut()
+                            .push(undo::UndoOp::Trash { originals });
+                        window.update_undo_actions();
+                        window.reload();
+                    }
+                ));
+            }
         }
     }
 
@@ -1610,15 +1647,17 @@ impl WrenWindow {
     pub fn update_selection_actions(&self) {
         let has_selection = !self.selected_files().is_empty();
         let in_trash = self.current_location_is_trash();
-        // open / open-with / delete-permanently still apply inside trash
-        // (deleting a trashed file is the canonical "purge" action). The
-        // rest don't make sense on items already in the bin.
+        // open / open-with / delete-permanently / move-to-trash all
+        // apply inside trash. move-to-trash is rerouted to
+        // delete_permanently() in the handler when in_trash, so the
+        // Delete key naturally becomes "purge selected" — matching
+        // Nautilus.
         self.action_set_enabled("win.open-selection", has_selection);
         self.action_set_enabled("win.open-with", has_selection);
         self.action_set_enabled("win.delete-permanently", has_selection);
+        self.action_set_enabled("win.move-to-trash", has_selection);
         for action in &[
             "win.rename",
-            "win.move-to-trash",
             "win.cut",
             "win.copy",
             "win.create-link",
@@ -1670,6 +1709,16 @@ impl WrenWindow {
 
     pub fn show_toast(&self, message: &str) {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
+    }
+
+    /// Toast variant with an "Undo" button wired to `win.undo`.
+    /// Used by move-to-trash so a single trashed item can be reversed
+    /// without opening the trash view.
+    pub fn show_undo_toast(&self, message: &str) {
+        let toast = adw::Toast::new(message);
+        toast.set_button_label(Some("Undo"));
+        toast.set_action_name(Some("win.undo"));
+        self.imp().toast_overlay.add_toast(toast);
     }
 
     // ── File-operation progress + cancel ─────────────────────────────────────

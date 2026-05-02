@@ -10,50 +10,26 @@ use gio::Cancellable;
 use gio::prelude::FileExtManual;
 
 impl WrenWindow {
+    /// Move selection to the Trash. Inside `trash:///` this is rerouted
+    /// to `delete_permanently()` so the Delete key still does the
+    /// expected thing (matches Nautilus behaviour). No confirmation
+    /// dialog: the trash itself is the safety net, and the toast that
+    /// fires on success carries an "Undo" button.
     pub fn move_to_trash(&self) {
+        if self.current_location_is_trash() {
+            self.delete_permanently();
+            return;
+        }
         let files = self.selected_files();
         if files.is_empty() {
             return;
         }
-        let n = files.len();
-        let name = files
-            .first()
-            .and_then(|f| f.basename())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let body = if n == 1 {
-            format!("\"{name}\" will be moved to the Trash.")
-        } else {
-            format!("{n} items will be moved to the Trash.")
-        };
-        let confirm = adw::AlertDialog::new(Some("Move to Trash?"), Some(&body));
-        confirm.add_response("cancel", "Cancel");
-        confirm.add_response("trash", "Move to Trash");
-        confirm.set_response_appearance("trash", adw::ResponseAppearance::Destructive);
-        confirm.set_default_response(Some("cancel"));
-        confirm.set_close_response("cancel");
-        let files = std::rc::Rc::new(files);
-        confirm.connect_response(
-            None,
-            glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |_, response| {
-                    if response != "trash" {
-                        return;
-                    }
-                    let files = (*files).clone();
-                    glib::spawn_future_local(glib::clone!(
-                        #[weak]
-                        window,
-                        async move {
-                            window.do_trash_files(files).await;
-                        }
-                    ));
-                }
-            ),
-        );
-        confirm.present(Some(self));
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)] self,
+            async move {
+                window.do_trash_files(files).await;
+            }
+        ));
     }
 
     /// Permanently delete every item in `trash:///` after confirmation.
@@ -297,6 +273,7 @@ impl WrenWindow {
         handle.set_total(total_items, 0);
 
         let mut not_supported: Vec<gio::File> = Vec::new();
+        let mut trashed: Vec<gio::File> = Vec::new();
         let mut last_ui = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(1))
             .unwrap_or_else(std::time::Instant::now);
@@ -322,6 +299,7 @@ impl WrenWindow {
                 }
                 match file.trash_future(glib::Priority::DEFAULT).await {
                     Ok(()) => {
+                        trashed.push(file.clone());
                         // Tick the per-item counter so the bar advances. The
                         // trash backend doesn't tell us how many sub-items it
                         // moved, so we assume the pre-walked count.
@@ -349,6 +327,25 @@ impl WrenWindow {
         handle.set_fraction(1.0);
         self.op_finish(&handle);
         self.reload();
+
+        if !trashed.is_empty() {
+            let body = if trashed.len() == 1 {
+                let name = trashed[0]
+                    .basename()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!("\u{201C}{name}\u{201D} moved to Trash")
+            } else {
+                format!("{} items moved to Trash", trashed.len())
+            };
+            self.show_undo_toast(&body);
+            self.imp()
+                .undo_stack
+                .borrow_mut()
+                .push(super::undo::UndoOp::Trash { originals: trashed });
+            self.imp().redo_stack.borrow_mut().clear();
+            self.update_undo_actions();
+        }
 
         if not_supported.is_empty() {
             return;
@@ -440,6 +437,88 @@ impl WrenWindow {
             ),
         );
         dialog.present(Some(self));
+    }
+
+    /// Restore items from trash by matching `trash::orig-path` against
+    /// a list of original `gio::File`s. Used by undo of move-to-trash:
+    /// after a successful trash, the original `gio::File`s no longer
+    /// exist as files but their URIs still describe the destination
+    /// we need to restore to.
+    ///
+    /// Returns `Err` only if enumeration of trash failed; per-item
+    /// failures are collected into a toast.
+    pub(super) async fn restore_from_trash_by_orig(
+        &self,
+        originals: &[gio::File],
+    ) -> Result<(), String> {
+        // Build a set of paths to look for. Paths beat URIs here
+        // because `trash::orig-path` is stored as a byte-string path.
+        let wanted: std::collections::HashSet<std::path::PathBuf> = originals
+            .iter()
+            .filter_map(|f| f.path())
+            .collect();
+        if wanted.is_empty() {
+            return Err("originals had no local paths".into());
+        }
+        let trash = gio::File::for_uri("trash:///");
+        let enumerator = trash
+            .enumerate_children_future(
+                "standard::name,trash::orig-path",
+                gio::FileQueryInfoFlags::NONE,
+                glib::Priority::DEFAULT,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut to_restore: Vec<(gio::File, gio::File)> = Vec::new();
+        loop {
+            let batch = enumerator
+                .next_files_future(50, glib::Priority::DEFAULT)
+                .await
+                .map_err(|e| e.to_string())?;
+            if batch.is_empty() { break; }
+            for info in batch {
+                let Some(orig_bytes) = info.attribute_byte_string("trash::orig-path") else {
+                    continue;
+                };
+                let orig_str = std::str::from_utf8(orig_bytes.as_ref()).unwrap_or_default();
+                if orig_str.is_empty() { continue; }
+                let orig_path = std::path::PathBuf::from(orig_str);
+                if !wanted.contains(&orig_path) {
+                    continue;
+                }
+                let entry = trash.child(&info.name());
+                let dest = gio::File::for_path(&orig_path);
+                to_restore.push((entry, dest));
+            }
+        }
+
+        for (entry, dest) in &to_restore {
+            log_op("undo trash (restore)", entry, Some(dest));
+            // Recreate missing parent directories — same as the
+            // explicit Restore path.
+            if let Some(parent) = dest.parent() {
+                if !parent.query_exists(gio::Cancellable::NONE) {
+                    if let Err(e) = parent.make_directory_with_parents(gio::Cancellable::NONE) {
+                        if !e.matches(gio::IOErrorEnum::Exists) {
+                            log_err("undo trash (mkdir)", entry, Some(dest), &e);
+                            self.show_toast(&format!("Could not undo: {e}"));
+                            continue;
+                        }
+                    }
+                }
+            }
+            let (fut, _progress) = entry.move_future(
+                dest,
+                gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
+                glib::Priority::DEFAULT,
+            );
+            if let Err(e) = fut.await {
+                log_err("undo trash", entry, Some(dest), &e);
+                self.show_toast(&format!("Could not undo: {e}"));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn current_location_is_trash(&self) -> bool {

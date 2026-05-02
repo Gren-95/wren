@@ -17,19 +17,19 @@ fn main() -> glib::ExitCode {
 }
 
 // Drop a small set of known-harmless GTK4 warnings before they reach
-// the default writer. Filtering is purely by substring so genuine
-// problems still surface.
+// the default writer. Real problems still pass through.
 //
 //   "reported min width -3, but sizes must be >= 0"
-//     Fired during initial layout of ellipsizing GtkLabels — a
-//     long-standing GTK4 quirk observed in every GTK4 file manager.
+//     Long-standing GTK4 quirk observed in every GTK4 file manager —
+//     fires during initial layout of ellipsizing GtkLabels.
 //
-//   "Finalizing ..., but it still has children left: GtkPopoverMenu"
-//     Fires only at app dispose. PopoverMenus parented to file
-//     views / sidebar rows would be unparented if we connected to
-//     unrealize, but unrealize misfires on stack-page hides
-//     (grid↔list view switch) and on sidebar rebuilds — detaching
-//     mid-session and breaking subsequent right-clicks.
+//   "still has children left: GtkPopoverMenu"
+//     Fires at app shutdown from sidebar row popovers. Each sidebar
+//     row owns its own context-menu PopoverMenu and they would all
+//     need a deterministic unparent point that doesn't misfire on
+//     mid-session sidebar rebuilds. The file-view popovers are now
+//     cleaned up properly in dispose — this filter only covers the
+//     sidebar case.
 fn install_log_filter() {
     let dropped = [
         "reported min width",
