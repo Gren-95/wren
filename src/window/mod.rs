@@ -1062,10 +1062,123 @@ impl WrenWindow {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
 
+        // Try anchoring a popover-based inline rename to the cell.
+        // Falls back to a centered AlertDialog if the cell isn't
+        // realised (selection scrolled off-screen, or the file is on
+        // a different tab).
+        let Some(idx) = self.current_tab_index() else { return };
+        let tabs = self.imp().tabs.borrow();
+        let Some(tab) = tabs.get(idx) else { return };
+        let anchor: Option<gtk4::Widget> = tab
+            .file_grid
+            .cell_for_file(&file)
+            .map(|c| c.upcast::<gtk4::Widget>())
+            .or_else(|| {
+                tab.file_list
+                    .row_for_file(&file)
+                    .map(|r| r.upcast::<gtk4::Widget>())
+            });
+        drop(tabs);
+
+        if let Some(anchor) = anchor {
+            self.rename_selection_inline(file, current_name, &anchor);
+        } else {
+            self.rename_selection_dialog(file, current_name);
+        }
+    }
+
+    /// Pop a small Popover with a text entry directly over the file's
+    /// cell. Enter commits, Escape cancels, focus-loss cancels.
+    fn rename_selection_inline(
+        &self,
+        file: gio::File,
+        current_name: String,
+        anchor: &gtk4::Widget,
+    ) {
+        let popover = gtk4::Popover::new();
+        popover.set_autohide(true);
+        popover.add_css_class("menu");
+
+        let entry = gtk4::Entry::new();
+        entry.set_text(&current_name);
+        // Pre-select just the stem so the typical "fix the name, keep
+        // the extension" workflow doesn't require a manual selection.
+        let stem_len = std::path::Path::new(&current_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.chars().count() as i32)
+            .unwrap_or(-1);
+        entry.select_region(0, stem_len);
+        entry.set_width_chars(20);
+
+        popover.set_child(Some(&entry));
+        popover.set_parent(anchor);
+
+        let committed = std::rc::Rc::new(std::cell::Cell::new(false));
+
+        let do_commit = glib::clone!(
+            #[weak(rename_to = window)] self,
+            #[weak] entry,
+            #[weak] popover,
+            #[strong] committed,
+            #[strong] current_name,
+            #[strong] file,
+            move || {
+                if committed.get() { return };
+                committed.set(true);
+                let new_name = entry.text().to_string();
+                popover.popdown();
+                if new_name.is_empty() || new_name == current_name {
+                    return;
+                }
+                window.spawn_rename(file.clone(), current_name.clone(), new_name);
+            }
+        );
+
+        entry.connect_activate(glib::clone!(
+            #[strong] do_commit,
+            move |_| do_commit()
+        ));
+
+        // Escape inside the entry → close popover without commit.
+        let key_ctrl = gtk4::EventControllerKey::new();
+        key_ctrl.connect_key_pressed(glib::clone!(
+            #[weak] popover,
+            #[strong] committed,
+            #[upgrade_or] glib::Propagation::Proceed,
+            move |_, key, _, _| {
+                if key == gtk4::gdk::Key::Escape {
+                    committed.set(true); // suppress focus-loss commit
+                    popover.popdown();
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
+        ));
+        entry.add_controller(key_ctrl);
+
+        // Closing the popover via tap-outside / Escape unparents it.
+        popover.connect_closed(move |p| p.unparent());
+
+        popover.popup();
+        entry.grab_focus();
+        // grab_focus selects all by default for a freshly-shown Entry;
+        // override with our stem-only selection.
+        entry.select_region(0, stem_len);
+    }
+
+    /// Fallback rename UI used when the file's cell isn't visible.
+    fn rename_selection_dialog(&self, file: gio::File, current_name: String) {
         let dialog = adw::AlertDialog::new(Some("Rename"), None::<&str>);
         let entry = gtk4::Entry::new();
         entry.set_text(&current_name);
-        entry.select_region(0, -1);
+        let stem_len = std::path::Path::new(&current_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.chars().count() as i32)
+            .unwrap_or(-1);
+        entry.select_region(0, stem_len);
         entry.set_activates_default(true);
         dialog.set_extra_child(Some(&entry));
         dialog.add_response("cancel", "Cancel");
@@ -1077,60 +1190,49 @@ impl WrenWindow {
         dialog.connect_response(
             None,
             glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                #[weak]
-                entry,
+                #[weak(rename_to = window)] self,
+                #[weak] entry,
                 move |_, response| {
-                    if response != "rename" {
-                        return;
-                    }
+                    if response != "rename" { return };
                     let new_name = entry.text().to_string();
-                    if new_name.is_empty() {
-                        return;
-                    }
-                    let old_name = current_name.clone();
-                    let file = file.clone();
-                    glib::spawn_future_local(glib::clone!(
-                        #[weak]
-                        window,
-                        async move {
-                            crate::wren_log!(
-                                "rename: {} -> {}",
-                                fmt_path(&file),
-                                new_name
-                            );
-                            match file
-                                .set_display_name_future(&new_name, glib::Priority::DEFAULT)
-                                .await
-                            {
-                                Ok(new_file) => {
-                                    let imp = window.imp();
-                                    imp.undo_stack.borrow_mut().push(
-                                        undo::UndoOp::Rename {
-                                            file: new_file,
-                                            old_name,
-                                            new_name,
-                                        },
-                                    );
-                                    imp.redo_stack.borrow_mut().clear();
-                                    window.update_undo_actions();
-                                    window.reload();
-                                }
-                                Err(e) => {
-                                    crate::wren_log!(
-                                        "rename failed: {}: {e}",
-                                        fmt_path(&file)
-                                    );
-                                    window.show_toast(&format!("Could not rename: {e}"))
-                                }
-                            }
-                        }
-                    ));
+                    if new_name.is_empty() || new_name == current_name { return };
+                    window.spawn_rename(file.clone(), current_name.clone(), new_name);
                 }
             ),
         );
         dialog.present(Some(self));
+    }
+
+    /// Shared back-end for both the inline and dialog rename paths.
+    /// Issues the GIO rename, pushes onto the undo stack on success,
+    /// and surfaces errors via toast.
+    fn spawn_rename(&self, file: gio::File, old_name: String, new_name: String) {
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)] self,
+            async move {
+                crate::wren_log!("rename: {} -> {}", fmt_path(&file), new_name);
+                match file
+                    .set_display_name_future(&new_name, glib::Priority::DEFAULT)
+                    .await
+                {
+                    Ok(new_file) => {
+                        let imp = window.imp();
+                        imp.undo_stack.borrow_mut().push(undo::UndoOp::Rename {
+                            file: new_file,
+                            old_name,
+                            new_name,
+                        });
+                        imp.redo_stack.borrow_mut().clear();
+                        window.update_undo_actions();
+                        window.reload();
+                    }
+                    Err(e) => {
+                        crate::wren_log!("rename failed: {}: {e}", fmt_path(&file));
+                        window.show_toast(&format!("Could not rename: {e}"));
+                    }
+                }
+            }
+        ));
     }
 
     pub fn batch_rename(&self) {

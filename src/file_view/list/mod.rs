@@ -402,6 +402,23 @@ impl WrenFileList {
         });
     }
 
+    /// Find a currently-bound (visible) row whose backing FileObject
+    /// points at `target`. See WrenFileGrid::cell_for_file for usage.
+    pub fn row_for_file(&self, target: &gio::File) -> Option<WrenFileRow> {
+        let imp = imp::WrenFileList::from_obj(self);
+        let map = imp.bound_rows.borrow();
+        for weak in map.values() {
+            if let Some(row) = weak.upgrade() {
+                if let Some(obj) = row.bound_file_object() {
+                    if obj.file().equal(target) {
+                        return Some(row);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Wire middle-click and Ctrl+left-click to open the targeted item in
     /// a new tab. See WrenFileGrid::connect_open_in_tab for the rationale.
     pub fn connect_open_in_tab<F: Fn(&FileObject) + 'static>(&self, f: F) {

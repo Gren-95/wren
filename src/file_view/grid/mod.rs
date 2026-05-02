@@ -429,6 +429,26 @@ impl WrenFileGrid {
         });
     }
 
+    /// Find a currently-bound (visible) cell whose backing FileObject
+    /// points at `target`. Returns None when the file isn't realised on
+    /// screen (scrolled out of the viewport, or the cell has been
+    /// recycled to a different item). Used by inline rename to anchor
+    /// its popover.
+    pub fn cell_for_file(&self, target: &gio::File) -> Option<WrenFileCell> {
+        let imp = imp::WrenFileGrid::from_obj(self);
+        let map = imp.bound_cells.borrow();
+        for weak in map.values() {
+            if let Some(cell) = weak.upgrade() {
+                if let Some(obj) = cell.bound_file_object() {
+                    if obj.file().equal(target) {
+                        return Some(cell);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Wire middle-click and Ctrl+left-click to open the targeted item in
     /// a new tab. Picks the cell at the click coordinates and walks up to
     /// the WrenFileCell to retrieve the bound FileObject.
