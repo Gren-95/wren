@@ -74,18 +74,13 @@ button.wren-current-crumb:hover {
   background-color: alpha(@accent_color, 0.25);
 }
 
-/* Path entry (Ctrl+L / clicking current crumb) — pill-shaped, like
-   YouTube's search input. The bottom half goes square only while the
-   suggestions popover is showing so the entry + dropdown read as one
-   capsule that grows downward. Background matches the popover so
-   they share one continuous fill. */
+/* Path entry (Ctrl+L / clicking current crumb) — pill-shaped to
+   match the rest of the breadcrumb chrome. Suggestions appear
+   below as a separate menu-style popover (the Epiphany pattern);
+   no need to square off the bottom corners. */
 .wren-path-entry {
   border-radius: 9999px;
   padding: 5px 14px;
-  background-color: @view_bg_color;
-}
-.wren-path-entry.wren-path-entry-open {
-  border-radius: 9999px 9999px 0 0;
 }
 
 /* Keyboard shortcut labels in the shortcuts dialog */
@@ -193,50 +188,23 @@ button.wren-sidebar-toggle:hover {
 }
 
 /* ── Path-suggestion popover ──────────────────────────────────────────────
-   YouTube-style attached dropdown. The default Adwaita popover
-   styling (rounded corners, top shadow, internal padding) breaks the
-   merged-capsule look, so we override aggressively:
-     - Reset the popover wrapper itself (no margin / shadow).
-     - Restyle `> contents` to have square top, pill-radius bottom,
-       no top border, downward-only shadow.
-     - Match the entry's background colour so the seam disappears.
-   Rows are edge-to-edge with hover / selected fills covering the
-   full row width. */
-.wren-suggest-popover {
-  margin: 0;
+   Mirrors Epiphany's URL-suggestions popover: relies on the default
+   Adwaita popover chrome (rounded corners, shadow, padding) and only
+   touches row paddings + hover/selected fills. The shipping GNOME
+   pattern. */
+popover.suggestions {
+  padding-top: 6px;
+  padding-left: 9px;
+  padding-right: 9px;
+  padding-bottom: 6px;
+}
+popover.suggestions list > row {
   padding: 0;
-  background: transparent;
-  box-shadow: none;
 }
-.wren-suggest-popover > contents {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  border-bottom-left-radius: 20px;
-  border-bottom-right-radius: 20px;
-  padding: 8px 0;
-  background-color: @view_bg_color;
-  color: @view_fg_color;
-  /* No shadow — the wrapper popover is supposed to read as a
-     continuation of the entry, not as a floating card. Without a
-     shadow the dropdown looks attached rather than hovering. */
-  box-shadow: none;
-  border: none;
+popover.suggestions list > row:hover {
+  background-color: alpha(currentColor, 0.04);
 }
-.wren-suggest-list,
-.wren-suggest-list > row {
-  background: transparent;
-}
-.wren-suggest-list > row {
-  border-radius: 0;
-  margin: 0;
-  padding: 0;
-  transition: background-color 80ms ease;
-}
-.wren-suggest-list > row:hover {
-  background-color: alpha(currentColor, 0.07);
-}
-.wren-suggest-list > row:selected {
+popover.suggestions list > row:selected {
   background-color: alpha(currentColor, 0.10);
-  color: inherit;
 }
 

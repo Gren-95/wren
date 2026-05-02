@@ -43,27 +43,21 @@ impl ObjectImpl for WrenBreadcrumbBar {
         self.parent_constructed();
         let obj = self.obj();
 
-        // Build the suggestions popover. Anchored below the entry,
-        // non-autohiding so the entry keeps focus while the user
-        // arrows through entries.
+        // Suggestions popover, modelled on Epiphany's URL-bar
+        // suggestions (src/ephy-location-entry.c + .blp): styled with
+        // .menu and .suggestions, has-arrow disabled, autohide off
+        // (we drive show/hide explicitly so typing doesn't dismiss
+        // it), and parented directly to the entry so positioning is
+        // automatic.
         let popover = gtk4::Popover::new();
         popover.set_autohide(false);
         popover.set_position(gtk4::PositionType::Bottom);
         popover.set_has_arrow(false);
-        popover.add_css_class("wren-suggest-popover");
-        // Pull the popover up so its top edge butts directly against
-        // the entry's bottom edge. The default Adwaita popover gap
-        // varies with theme padding; -10 closes it on libadwaita 1.6
-        // / GTK 4.18 without overlapping into the entry.
-        popover.set_offset(0, -10);
-        // The popover's default focus dance pulls focus away from the
-        // entry on `popup()`. Disabling it keeps the cursor in the
-        // entry while the popover surfaces.
+        popover.add_css_class("menu");
+        popover.add_css_class("suggestions");
         popover.set_can_focus(false);
 
         let scroll = gtk4::ScrolledWindow::new();
-        scroll.set_min_content_width(360);
-        scroll.set_max_content_width(640);
         scroll.set_max_content_height(320);
         scroll.set_propagate_natural_width(true);
         scroll.set_propagate_natural_height(true);
@@ -71,9 +65,6 @@ impl ObjectImpl for WrenBreadcrumbBar {
 
         let list = gtk4::ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
-        list.add_css_class("wren-suggest-list");
-        // Don't let the list intercept focus on click — the entry
-        // should keep the cursor and bounce keystrokes through.
         list.set_can_focus(false);
         scroll.set_child(Some(&list));
         popover.set_child(Some(&scroll));
@@ -256,15 +247,7 @@ impl WrenBreadcrumbBar {
         let raw = entry.text().to_string();
         let matches = super::list_completions(&raw, 50);
 
-        // Mirror the dropdown's open/closed state on the entry via a
-        // CSS class. The styling squares off the entry's bottom edge
-        // when suggestions are visible so the seam between the two
-        // widgets disappears.
-        if matches.is_empty() {
-            entry.remove_css_class("wren-path-entry-open");
-        } else {
-            entry.add_css_class("wren-path-entry-open");
-        }
+        let _ = entry; // (entry-side state classes no longer needed)
 
         // Capture the previously-highlighted name so we can restore the
         // user's selection after rebuild — without this, every
@@ -342,7 +325,6 @@ impl WrenBreadcrumbBar {
         if let Some(popover) = self.suggest_popover.borrow().clone() {
             popover.popdown();
         }
-        self.path_entry.remove_css_class("wren-path-entry-open");
     }
 
     pub fn move_selection(&self, delta: i32) {
