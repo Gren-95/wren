@@ -37,14 +37,21 @@ impl WrenWindow {
             if let Some(app) = w.application().and_downcast::<WrenApplication>() {
                 app.set_window_maximized(w.is_maximized());
                 app.set_sidebar_visible(w.imp().split_view.shows_sidebar());
-                // Save the active tab's current location so the next launch
-                // opens there. Empty when no tab is open.
-                if let Some(idx) = w.current_tab_index() {
-                    let tabs = w.imp().tabs.borrow();
-                    if let Some(loc) = tabs.get(idx).and_then(|t| t.navigation.current()) {
-                        app.set_last_directory(&loc.uri());
-                    }
+                // Snapshot every open tab's current URI so the next
+                // launch can rebuild the same set. last_directory is
+                // kept up-to-date as a fallback for older configs.
+                let imp = w.imp();
+                let tabs = imp.tabs.borrow();
+                let uris: Vec<String> = tabs
+                    .iter()
+                    .filter_map(|t| t.navigation.current().map(|f| f.uri().to_string()))
+                    .collect();
+                let active = w.current_tab_index().unwrap_or(0) as i32;
+                drop(tabs);
+                if !uris.is_empty() {
+                    app.set_last_directory(&uris[active.max(0) as usize]);
                 }
+                app.set_last_tabs(uris, active);
             }
             glib::Propagation::Proceed
         });
@@ -56,6 +63,19 @@ impl WrenWindow {
     }
 
     // ── Tab helpers ──────────────────────────────────────────────────────────
+
+    /// Set which tab is the active (visible) one. Used at startup to
+    /// restore the tab that was selected in the previous session.
+    pub fn activate_tab_at(&self, idx: usize) {
+        let imp = self.imp();
+        let tabs = imp.tabs.borrow();
+        let Some(tab) = tabs.get(idx) else { return };
+        let widget = tab.content_widget.clone();
+        drop(tabs);
+        if let Some(page) = imp.tab_view.page(&widget).into() {
+            imp.tab_view.set_selected_page(&page);
+        }
+    }
 
     fn current_tab_index(&self) -> Option<usize> {
         let imp = self.imp();
@@ -105,6 +125,28 @@ impl WrenWindow {
                 }
             }
         ));
+
+        // Middle-click and Ctrl+left-click on a directory open it in a
+        // new tab; on a file they fall through to the default opener
+        // (so Ctrl+click on a .pdf still launches the viewer).
+        let new_tab_handler = glib::clone!(
+            #[weak(rename_to = window)] self,
+            move |obj: &FileObject| {
+                if obj.is_directory() {
+                    window.add_tab(obj.file().clone());
+                } else {
+                    let uri = obj.file().uri();
+                    if let Err(e) = gio::AppInfo::launch_default_for_uri(
+                        uri.as_str(),
+                        gio::AppLaunchContext::NONE,
+                    ) {
+                        window.show_toast(&format!("Cannot open: {e}"));
+                    }
+                }
+            }
+        );
+        tab.file_grid.connect_open_in_tab(new_tab_handler.clone());
+        tab.file_list.connect_open_in_tab(new_tab_handler);
 
         let menu = self.context_menu_model();
         tab.file_grid.setup_context_menu(&menu);

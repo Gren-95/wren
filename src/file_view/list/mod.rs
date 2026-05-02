@@ -402,6 +402,43 @@ impl WrenFileList {
         });
     }
 
+    /// Wire middle-click and Ctrl+left-click to open the targeted item in
+    /// a new tab. See WrenFileGrid::connect_open_in_tab for the rationale.
+    pub fn connect_open_in_tab<F: Fn(&FileObject) + 'static>(&self, f: F) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let f = std::rc::Rc::new(f);
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(0);
+        gesture.connect_pressed(glib::clone!(
+            #[weak(rename_to = lv)] imp.list_view,
+            #[strong] f,
+            move |gesture, _, x, y| {
+                let btn = gesture.current_button();
+                let mods = gesture.current_event_state();
+                let is_middle = btn == 2;
+                let is_ctrl_left = btn == 1
+                    && mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+                if !(is_middle || is_ctrl_left) { return; }
+                let Some(picked) = lv.pick(x, y, gtk4::PickFlags::NON_TARGETABLE) else {
+                    return;
+                };
+                let mut cur: Option<gtk4::Widget> = Some(picked);
+                while let Some(w) = cur {
+                    if let Some(row) = w.downcast_ref::<WrenFileRow>() {
+                        if let Some(obj) = row.bound_file_object() {
+                            f(&obj);
+                            gesture.set_state(gtk4::EventSequenceState::Claimed);
+                        }
+                        return;
+                    }
+                    if w.is::<gtk4::ListView>() { return; }
+                    cur = w.parent();
+                }
+            }
+        ));
+        imp.list_view.add_controller(gesture);
+    }
+
     pub fn set_sort_state(&self, key: &str, reversed: bool) {
         let imp = imp::WrenFileList::from_obj(self);
         let buttons = imp.sort_buttons.borrow();

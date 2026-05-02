@@ -77,6 +77,14 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn last_tabs(&self) -> Vec<String> { self.imp().last_tabs.borrow().clone() }
+    pub fn set_last_tabs(&self, uris: Vec<String>, active_index: i32) {
+        *self.imp().last_tabs.borrow_mut() = uris;
+        self.imp().last_tab_index.set(active_index);
+        self.imp().save_settings();
+    }
+    pub fn last_tab_index(&self) -> i32 { self.imp().last_tab_index.get() }
+
     pub fn animations_enabled(&self) -> bool { self.imp().animations_enabled.get() }
     pub fn set_animations_enabled(&self, v: bool) {
         self.imp().animations_enabled.set(v);

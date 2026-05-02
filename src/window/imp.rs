@@ -732,17 +732,39 @@ impl ObjectImpl for WrenWindow {
         obj.update_selection_actions();
         obj.update_undo_actions();
 
-        // Open first tab to the previously-active directory if it still
-        // exists, falling back to $HOME.
-        let initial = obj
+        // Restore tabs from the previous session if any of them still
+        // exist on disk; fall back to last_directory, then $HOME.
+        let app = obj
             .application()
-            .and_downcast::<crate::application::WrenApplication>()
-            .map(|app| app.last_directory())
-            .filter(|s| !s.is_empty())
+            .and_downcast::<crate::application::WrenApplication>();
+        let saved_tabs: Vec<gio::File> = app
+            .as_ref()
+            .map(|a| a.last_tabs())
+            .unwrap_or_default()
+            .into_iter()
             .map(|uri| gio::File::for_uri(&uri))
             .filter(|f| f.query_exists(gio::Cancellable::NONE))
-            .unwrap_or_else(|| gio::File::for_path(glib::home_dir()));
-        obj.add_tab(initial);
+            .collect();
+
+        if !saved_tabs.is_empty() {
+            for file in &saved_tabs {
+                obj.add_tab(file.clone());
+            }
+            // Restore which tab was active. Clamp because the saved
+            // index may be out of range if some tabs disappeared.
+            if let Some(a) = &app {
+                let idx = a.last_tab_index().clamp(0, (saved_tabs.len() as i32) - 1);
+                obj.activate_tab_at(idx as usize);
+            }
+        } else {
+            let initial = app
+                .map(|a| a.last_directory())
+                .filter(|s| !s.is_empty())
+                .map(|uri| gio::File::for_uri(&uri))
+                .filter(|f| f.query_exists(gio::Cancellable::NONE))
+                .unwrap_or_else(|| gio::File::for_path(glib::home_dir()));
+            obj.add_tab(initial);
+        }
     }
 }
 

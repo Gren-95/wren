@@ -19,6 +19,8 @@ pub struct WrenApplication {
     pub window_maximized: Cell<bool>,
     pub sidebar_visible: Cell<bool>,
     pub last_directory: RefCell<String>,
+    pub last_tabs: RefCell<Vec<String>>,
+    pub last_tab_index: Cell<i32>,
     pub color_scheme: RefCell<String>,
     pub animations_enabled: Cell<bool>,
     pub debug_logging: Cell<bool>,
@@ -39,6 +41,8 @@ impl Default for WrenApplication {
             window_maximized: Cell::new(false),
             sidebar_visible: Cell::new(true),
             last_directory: RefCell::new(String::new()),
+            last_tabs: RefCell::new(Vec::new()),
+            last_tab_index: Cell::new(0),
             color_scheme: RefCell::new("default".to_string()),
             animations_enabled: Cell::new(true),
             debug_logging: Cell::new(false),
@@ -97,6 +101,21 @@ impl WrenApplication {
             if let Ok(v) = kf.string("General", "last_directory") {
                 *self.last_directory.borrow_mut() = v.to_string();
             }
+            // Stored as a single \t-joined string. \t can't appear in a
+            // URI (RFC 3986 reserves only printable chars), so it's safe
+            // as a separator without escaping. Splitting an empty string
+            // would yield [""], hence the explicit empty check.
+            if let Ok(joined) = kf.string("General", "last_tabs") {
+                let s = joined.to_string();
+                *self.last_tabs.borrow_mut() = if s.is_empty() {
+                    Vec::new()
+                } else {
+                    s.split('\t').map(|s| s.to_string()).collect()
+                };
+            }
+            if let Ok(v) = kf.integer("General", "last_tab_index") {
+                self.last_tab_index.set(v.max(0));
+            }
             if let Ok(v) = kf.boolean("Appearance", "animations") {
                 self.animations_enabled.set(v);
             }
@@ -131,6 +150,12 @@ impl WrenApplication {
         kf.set_boolean("Window", "maximized", self.window_maximized.get());
         kf.set_boolean("Window", "sidebar_visible", self.sidebar_visible.get());
         kf.set_string("General", "last_directory", &self.last_directory.borrow());
+        kf.set_string(
+            "General",
+            "last_tabs",
+            &self.last_tabs.borrow().join("\t"),
+        );
+        kf.set_integer("General", "last_tab_index", self.last_tab_index.get());
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         kf.set_boolean("General", "debug_logging", self.debug_logging.get());
