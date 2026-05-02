@@ -244,7 +244,10 @@ impl WrenBreadcrumbBar {
         let raw = entry.text().to_string();
         let matches = super::list_completions(&raw, 50);
 
-        let _ = entry; // (entry-side state classes no longer needed)
+        // Length of the user's typed prefix in the *expanded* form —
+        // this is what the matched paths begin with after tilde
+        // expansion, so it's the right offset for prefix-dimming.
+        let typed_len = super::expanded_typed_len(&raw);
 
         // Capture the previously-highlighted name so we can restore the
         // user's selection after rebuild — without this, every
@@ -267,28 +270,23 @@ impl WrenBreadcrumbBar {
             let row = gtk4::ListBoxRow::new();
             row.set_widget_name(name);
             row.set_can_focus(false);
-            // Row is edge-to-edge; the inner box carries the 16px
-            // horizontal padding. 8px top/bottom yields a ~36px row
-            // height — matches YouTube's search suggestions.
-            let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
-            row_box.set_margin_start(16);
-            row_box.set_margin_end(16);
-            row_box.set_margin_top(8);
-            row_box.set_margin_bottom(8);
-            let icon = gtk4::Image::from_icon_name(if *is_dir {
-                "folder-symbolic"
-            } else {
-                "text-x-generic-symbolic"
-            });
-            icon.set_pixel_size(20);
-            icon.add_css_class("dim-label");
-            let label = gtk4::Label::new(Some(name));
+            // Nautilus-style inline completion: each row shows the
+            // *full* path that this match would expand to, with the
+            // already-typed prefix dimmed and the completion bright.
+            // No icon, no extra chrome — just one line of text.
+            let label = gtk4::Label::new(None);
             label.set_xalign(0.0);
-            label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::Start);
             label.set_hexpand(true);
-            row_box.append(&icon);
-            row_box.append(&label);
-            row.set_child(Some(&row_box));
+            label.set_use_markup(true);
+            label.set_margin_start(12);
+            label.set_margin_end(12);
+            label.set_margin_top(6);
+            label.set_margin_bottom(6);
+            let full = super::full_completion_path(&raw, name, *is_dir)
+                .unwrap_or_else(|| name.clone());
+            label.set_markup(&format_completion_markup(&full, typed_len));
+            row.set_child(Some(&label));
             list.append(&row);
         }
 
@@ -346,3 +344,16 @@ impl WrenBreadcrumbBar {
 }
 
 impl WidgetImpl for WrenBreadcrumbBar {}
+
+// Build Pango markup for a single completion suggestion: dim the
+// already-typed prefix, leave the rest at full opacity. `typed_len`
+// is in bytes (Pango works on bytes for indices).
+fn format_completion_markup(full: &str, typed_len: usize) -> String {
+    let split = typed_len.min(full.len());
+    let (prefix, suffix) = full.split_at(split);
+    format!(
+        "<span alpha='55%'>{}</span>{}",
+        glib::markup_escape_text(prefix),
+        glib::markup_escape_text(suffix),
+    )
+}

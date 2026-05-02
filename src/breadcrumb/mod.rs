@@ -385,6 +385,38 @@ pub(crate) fn complete_path(entry: &gtk4::Entry) {
     }
 }
 
+/// Length in bytes of the user's typed input *as it would be expanded
+/// onto disk* — used to align the dimmed prefix in the suggestions
+/// popover. When the user types `~/Doc`, the matched paths begin with
+/// `/home/<user>/Doc`, so the prefix-dimming offset is the length of
+/// the expanded form, not the raw text.
+pub(crate) fn expanded_typed_len(raw: &str) -> usize {
+    expand_tilde(raw).len()
+}
+
+/// Full path string the popover should display for a single match —
+/// expanded parent + chosen basename + trailing `/` for directories.
+/// Returns None when the input doesn't have a parsable parent.
+pub(crate) fn full_completion_path(
+    raw: &str,
+    chosen: &str,
+    is_dir: bool,
+) -> Option<String> {
+    let expanded = expand_tilde(raw);
+    if !expanded.starts_with('/') { return None; }
+    let path = std::path::Path::new(&expanded);
+    let parent = if expanded.ends_with('/') {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+    let mut s = parent.join(chosen).to_string_lossy().into_owned();
+    if is_dir && !s.ends_with('/') {
+        s.push('/');
+    }
+    Some(s)
+}
+
 fn expand_tilde(s: &str) -> String {
     if let Some(rest) = s.strip_prefix("~/") {
         glib::home_dir().join(rest).to_string_lossy().into_owned()
