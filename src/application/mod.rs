@@ -13,7 +13,7 @@ impl WrenApplication {
     pub fn new(app_id: &str) -> Self {
         Object::builder()
             .property("application-id", app_id)
-            .property("flags", gio::ApplicationFlags::empty())
+            .property("flags", gio::ApplicationFlags::HANDLES_OPEN)
             .build()
     }
 

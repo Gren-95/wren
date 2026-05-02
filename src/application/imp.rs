@@ -163,6 +163,30 @@ impl ApplicationImpl for WrenApplication {
         window.present();
     }
 
+    // Invoked when the binary is launched with file arguments
+    // (e.g. `wren .` or `wren /tmp`). HANDLES_OPEN must be set on
+    // ApplicationFlags for GIO to route here instead of complaining.
+    fn open(&self, files: &[gio::File], _hint: &str) {
+        let app = self.obj();
+        let window = if let Some(win) = app.active_window().and_downcast::<WrenWindow>() {
+            win
+        } else {
+            WrenWindow::new(&app)
+        };
+        window.present();
+
+        // Use the first directory argument; ignore the rest. Files
+        // (non-directories) are treated as their parent directory so
+        // `wren README.md` opens the containing folder.
+        if let Some(first) = files.first() {
+            let target = match first.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE) {
+                gio::FileType::Directory => first.clone(),
+                _ => first.parent().unwrap_or_else(|| first.clone()),
+            };
+            window.navigate_to(target);
+        }
+    }
+
     fn startup(&self) {
         self.parent_startup();
         self.load_settings();
