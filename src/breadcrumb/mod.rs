@@ -189,6 +189,7 @@ impl WrenBreadcrumbBar {
     }
 
     pub fn leave_edit_mode(&self) {
+        self.imp().hide_suggestions();
         self.imp().mode_stack.set_visible_child_name("crumbs");
     }
 
@@ -245,35 +246,30 @@ fn friendly_name_for(file: &gio::File) -> String {
         .unwrap_or_else(|| "/".to_string())
 }
 
-// Tab-complete the path in the entry against the local filesystem.
-// - Splits the entry text into a parent dir + partial basename.
-// - Lists matching entries in the parent dir.
-// - On a single match: replaces with the full path (and trailing /
-//   if it's a directory).
-// - On multiple matches: extends to the longest common prefix.
+// Returns up to `limit` matching entries from the parent of the path
+// in `raw`, sorted alphabetically. Empty when the path doesn't refer
+// to a real local parent dir (relative paths, URIs, missing parents).
 //
-// Only handles absolute local paths (those starting with `/` or `~`).
-// URIs and relative paths are ignored — the entry already supports
-// pasting full URIs and committing them with Enter.
-pub(crate) fn complete_path(entry: &gtk4::Entry) {
-    let raw = entry.text().to_string();
-    let expanded = expand_tilde(&raw);
+// Each match is `(basename, is_dir)`; `is_dir` is true for both real
+// directories and symlinks (which we follow for autocompletion).
+pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
+    let expanded = expand_tilde(raw);
     if !expanded.starts_with('/') {
-        return;
+        return Vec::new();
     }
     let path = std::path::Path::new(&expanded);
     let (parent, partial) = if expanded.ends_with('/') {
-        (path, "")
+        (path.to_path_buf(), String::new())
     } else {
         match (path.parent(), path.file_name().and_then(|s| s.to_str())) {
-            (Some(p), Some(name)) => (p, name),
-            _ => return,
+            (Some(p), Some(name)) => (p.to_path_buf(), name.to_string()),
+            _ => return Vec::new(),
         }
     };
 
-    let entries = match std::fs::read_dir(parent) {
+    let entries = match std::fs::read_dir(&parent) {
         Ok(d) => d,
-        Err(_) => return,
+        Err(_) => return Vec::new(),
     };
     let mut matches: Vec<(String, bool)> = Vec::new();
     for ent in entries.flatten() {
@@ -281,7 +277,7 @@ pub(crate) fn complete_path(entry: &gtk4::Entry) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if !name.starts_with(partial) {
+        if !partial.is_empty() && !name.starts_with(&partial) {
             continue;
         }
         let is_dir = ent
@@ -290,18 +286,64 @@ pub(crate) fn complete_path(entry: &gtk4::Entry) {
             .unwrap_or(false);
         matches.push((name, is_dir));
     }
-    if matches.is_empty() { return; }
     matches.sort_by(|a, b| a.0.cmp(&b.0));
+    matches.truncate(limit);
+    matches
+}
 
-    let new_basename = if matches.len() == 1 {
-        let (name, is_dir) = &matches[0];
-        if *is_dir {
-            format!("{name}/")
-        } else {
-            name.clone()
-        }
+// Replace the partial basename in `text` with `chosen` (a full
+// basename). Returns the new full path string, with trailing `/`
+// when the chosen entry is a directory; None when the input doesn't
+// have a parsable parent dir.
+pub(crate) fn apply_completion(text: &str, chosen: &str) -> Option<String> {
+    let expanded = expand_tilde(text);
+    if !expanded.starts_with('/') { return None; }
+    let path = std::path::Path::new(&expanded);
+    let parent = if expanded.ends_with('/') {
+        path.to_path_buf()
     } else {
-        // Longest common prefix among all matches.
+        path.parent()?.to_path_buf()
+    };
+    let chosen_path = parent.join(chosen);
+    let is_dir = chosen_path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_dir() || m.file_type().is_symlink())
+        .unwrap_or(false);
+    let mut s = chosen_path.to_string_lossy().into_owned();
+    if is_dir && !s.ends_with('/') {
+        s.push('/');
+    }
+    Some(s)
+}
+
+// Tab-complete the path in the entry against the local filesystem.
+// - On a single match: fills the full name (with trailing / for dirs).
+// - On multiple matches: extends to the longest common prefix.
+//
+// Used by the explicit Tab keybinding; the live suggestions popover
+// uses list_completions + apply_completion directly.
+pub(crate) fn complete_path(entry: &gtk4::Entry) {
+    let raw = entry.text().to_string();
+    let matches = list_completions(&raw, usize::MAX);
+    if matches.is_empty() { return; }
+
+    // Compute the partial that's already typed so we know when "no
+    // more characters can be added unambiguously" (longest common
+    // prefix already equals user input — surface the menu instead).
+    let expanded = expand_tilde(&raw);
+    let partial = if expanded.ends_with('/') {
+        String::new()
+    } else {
+        std::path::Path::new(&expanded)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    };
+
+    let chosen = if matches.len() == 1 {
+        matches[0].0.clone()
+    } else {
         let mut prefix = matches[0].0.clone();
         for (name, _) in matches.iter().skip(1) {
             let common: String = prefix
@@ -313,19 +355,14 @@ pub(crate) fn complete_path(entry: &gtk4::Entry) {
             prefix = common;
             if prefix.is_empty() { break; }
         }
-        if prefix.len() == partial.len() {
-            // Already at the longest common prefix — nothing to add.
-            return;
-        }
+        if prefix.len() == partial.len() { return; }
         prefix
     };
 
-    let new_text = parent
-        .join(&new_basename)
-        .to_string_lossy()
-        .into_owned();
-    entry.set_text(&new_text);
-    entry.set_position(-1);
+    if let Some(text) = apply_completion(&raw, &chosen) {
+        entry.set_text(&text);
+        entry.set_position(-1);
+    }
 }
 
 fn expand_tilde(s: &str) -> String {
