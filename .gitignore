@@ -1,1 +1,3 @@
 /target
+# Per-developer Claude Code overrides (the shared file is .claude/settings.json)
+.claude/settings.local.json
