@@ -832,20 +832,24 @@ impl WrenWindow {
             #[strong] entry,
             move |overlay, child| {
                 if !child.is_visible() { return None; }
-                // Only care about positioning *our* panel; let any
-                // other overlay child use its own halign/valign.
                 if !child.has_css_class("wren-suggest-panel") {
                     return None;
                 }
-                let entry_width = entry.width();
-                if entry_width <= 0 { return None; }
+                // Bail out until the entry has actually been laid out;
+                // returning None here lets GTK fall back to halign /
+                // valign and on the *next* allocation we'll get a
+                // sensible width.
+                let raw_width = entry.width();
+                if raw_width < 80 { return None; }
+                // Clamp to a reasonable minimum so paths don't get
+                // truncated to "..." in narrow windows. The panel can
+                // overhang the entry's right edge a few px when this
+                // hits — still preferable to ellipsised suggestions.
+                let panel_width = raw_width.max(360);
                 let height = child
-                    .measure(gtk4::Orientation::Vertical, entry_width)
+                    .measure(gtk4::Orientation::Vertical, panel_width)
                     .1
                     .max(0);
-                // Where does the entry's bottom-left corner land in
-                // the overlay's coordinate space? compute_point handles
-                // the breadcrumb→header→overlay walk for us.
                 let bottom_left = gtk4::graphene::Point::new(
                     0.0,
                     entry.height() as f32,
@@ -856,7 +860,7 @@ impl WrenWindow {
                 Some(gtk4::gdk::Rectangle::new(
                     p.x() as i32,
                     p.y() as i32,
-                    entry_width,
+                    panel_width,
                     height,
                 ))
             }
