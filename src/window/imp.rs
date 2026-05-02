@@ -106,65 +106,84 @@ impl ObjectSubclass for WrenWindow {
         klass.bind_template();
         klass.bind_template_callbacks();
 
-        klass.install_action("win.navigate-back", None, |win, _, _| {
+        klass.install_action("win.navigate-back", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.navigate_back();
         });
-        klass.install_action("win.navigate-forward", None, |win, _, _| {
+        klass.install_action("win.navigate-forward", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.navigate_forward();
         });
-        klass.install_action("win.navigate-up", None, |win, _, _| {
+        klass.install_action("win.navigate-up", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.navigate_up();
         });
-        klass.install_action("win.toggle-search", None, |win, _, _| {
+        klass.install_action("win.toggle-search", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.toggle_search();
         });
-        klass.install_action("win.new-tab", None, |win, _, _| {
+        klass.install_action("win.new-tab", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.new_tab();
         });
-        klass.install_action("win.close-tab", None, |win, _, _| {
+        klass.install_action("win.close-tab", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.close_tab();
         });
-        klass.install_action("win.select-all", None, |win, _, _| {
+        klass.install_action("win.select-all", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.select_all();
         });
-        klass.install_action("win.open-settings", None, |win, _, _| {
+        klass.install_action("win.open-settings", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.open_settings();
         });
-        klass.install_action("win.focus-location", None, |win, _, _| {
+        klass.install_action("win.focus-location", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.focus_location();
         });
-        klass.install_action("win.open-selection", None, |win, _, _| {
+        klass.install_action("win.open-selection", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.open_selection();
         });
-        klass.install_action("win.open-with", None, |win, _, _| {
+        klass.install_action("win.open-with", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.open_with();
         });
-        klass.install_action("win.open-in-terminal", None, |win, _, _| {
+        klass.install_action("win.open-in-terminal", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.open_in_terminal();
         });
-        klass.install_action("win.new-folder", None, |win, _, _| {
+        klass.install_action("win.new-folder", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.new_folder();
         });
-        klass.install_action("win.rename", None, |win, _, _| {
+        klass.install_action("win.rename", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.rename_selection();
         });
-        klass.install_action("win.move-to-trash", None, |win, _, _| {
+        klass.install_action("win.move-to-trash", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.move_to_trash();
         });
-        klass.install_action("win.delete-permanently", None, |win, _, _| {
+        klass.install_action("win.delete-permanently", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.delete_permanently();
         });
-        klass.install_action("win.empty-trash", None, |win, _, _| {
+        klass.install_action("win.empty-trash", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.empty_trash();
         });
-        klass.install_action("win.restore-from-trash", None, |win, _, _| {
+        klass.install_action("win.restore-from-trash", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.restore_from_trash();
         });
         klass.install_action(
             "win.open-window-at",
             Some(glib::VariantTy::STRING),
-            |win, _, param| {
+            |win, action_name, param| {
                 if let Some(uri) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: {action_name}({uri})");
                     win.open_window_at(uri);
                 }
             },
@@ -172,79 +191,101 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action(
             "win.copy-path-at",
             Some(glib::VariantTy::STRING),
-            |win, _, param| {
+            |win, action_name, param| {
                 if let Some(uri) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: {action_name}({uri})");
                     win.copy_path_at(uri);
                 }
             },
         );
-        klass.install_action("win.copy", None, |win, _, _| {
+        klass.install_action("win.copy", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.copy_selection();
         });
-        klass.install_action("win.cut", None, |win, _, _| {
+        klass.install_action("win.cut", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.cut_selection();
         });
-        klass.install_action("win.paste", None, |win, _, _| {
+        klass.install_action("win.paste", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.paste();
         });
-        klass.install_action("win.zoom-in", None, |win, _, _| {
+        klass.install_action("win.zoom-in", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.zoom_in();
         });
-        klass.install_action("win.zoom-out", None, |win, _, _| {
+        klass.install_action("win.zoom-out", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.zoom_out();
         });
-        klass.install_action("win.zoom-reset", None, |win, _, _| {
+        klass.install_action("win.zoom-reset", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.zoom_reset();
         });
-        klass.install_action("win.properties", None, |win, _, _| {
+        klass.install_action("win.properties", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.show_properties();
         });
-        klass.install_action("win.create-link", None, |win, _, _| {
+        klass.install_action("win.create-link", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.create_link();
         });
-        klass.install_action("win.add-bookmark", None, |win, _, _| {
+        klass.install_action("win.add-bookmark", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.add_bookmark();
         });
-        klass.install_action("win.undo", None, |win, _, _| {
+        klass.install_action("win.undo", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.undo();
         });
-        klass.install_action("win.redo", None, |win, _, _| {
+        klass.install_action("win.redo", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.redo();
         });
-        klass.install_action("win.batch-rename", None, |win, _, _| {
+        klass.install_action("win.batch-rename", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.batch_rename();
         });
-        klass.install_action("win.duplicate", None, |win, _, _| {
+        klass.install_action("win.duplicate", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.duplicate();
         });
-        klass.install_action("win.about", None, |win, _, _| {
+        klass.install_action("win.about", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.show_about();
         });
-        klass.install_action("win.reload", None, |win, _, _| {
+        klass.install_action("win.reload", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.reload();
         });
-        klass.install_action("win.toggle-sidebar", None, |win, _, _| {
+        klass.install_action("win.toggle-sidebar", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             let imp = win.imp();
             let show = !imp.split_view.shows_sidebar();
             imp.split_view.set_show_sidebar(show);
         });
-        klass.install_action("win.navigate-home", None, |win, _, _| {
+        klass.install_action("win.navigate-home", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.navigate_home();
         });
-        klass.install_action("win.new-window", None, |win, _, _| {
+        klass.install_action("win.new-window", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.new_window();
         });
-        klass.install_action("win.copy-path", None, |win, _, _| {
+        klass.install_action("win.copy-path", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.copy_path();
         });
-        klass.install_action("win.show-shortcuts", None, |win, _, _| {
+        klass.install_action("win.show-shortcuts", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
             win.show_shortcuts();
         });
         klass.install_action(
             "win.remove-bookmark",
             Some(glib::VariantTy::STRING),
-            |win, _, param| {
+            |win, action_name, param| {
                 if let Some(uri) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: {action_name}({uri})");
                     win.remove_bookmark(uri);
                 }
             },
@@ -252,8 +293,9 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action(
             "win.open-tab-at",
             Some(glib::VariantTy::STRING),
-            |win, _, param| {
+            |win, action_name, param| {
                 if let Some(uri) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: {action_name}({uri})");
                     win.add_tab(gio::File::for_uri(uri));
                 }
             },
@@ -261,8 +303,9 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action(
             "win.open-terminal-at",
             Some(glib::VariantTy::STRING),
-            |win, _, param| {
+            |win, action_name, param| {
                 if let Some(uri) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: {action_name}({uri})");
                     win.open_terminal_at_uri(uri);
                 }
             },
@@ -336,6 +379,7 @@ impl ObjectImpl for WrenWindow {
                     .and_then(|v| v.get::<bool>())
                     .unwrap_or(true);
                 let new_val = !current;
+                crate::wren_log!("action: win.toggle-extensions -> {new_val}");
                 action.set_state(&new_val.to_variant());
                 obj.imp().show_extensions.set(new_val);
                 obj.apply_extensions_setting();
@@ -364,6 +408,7 @@ impl ObjectImpl for WrenWindow {
                     .and_then(|v| v.get::<bool>())
                     .unwrap_or(false);
                 let new_val = !current;
+                crate::wren_log!("action: win.toggle-hidden -> {new_val}");
                 action.set_state(&new_val.to_variant());
                 obj.imp().show_hidden.set(new_val);
                 obj.apply_hidden_filter();
@@ -385,6 +430,7 @@ impl ObjectImpl for WrenWindow {
             obj,
             move |action, param| {
                 if let Some(key_str) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: win.set-sort-key({key_str})");
                     action.set_state(&key_str.to_variant());
                     obj.set_sort_key(key_str);
                     if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
@@ -410,6 +456,7 @@ impl ObjectImpl for WrenWindow {
                     .and_then(|v| v.get::<bool>())
                     .unwrap_or(false);
                 let new_val = !current;
+                crate::wren_log!("action: win.toggle-sort-reversed -> {new_val}");
                 action.set_state(&new_val.to_variant());
                 obj.set_sort_reversed(new_val);
                 if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {
@@ -446,6 +493,7 @@ impl ObjectImpl for WrenWindow {
             obj,
             move |action, param| {
                 if let Some(mode) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: win.set-view-mode({mode})");
                     action.set_state(&mode.to_variant());
                     obj.set_view_mode(mode);
                     if let Some(app) = obj.application().and_downcast::<crate::application::WrenApplication>() {

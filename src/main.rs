@@ -1,6 +1,7 @@
 mod application;
 mod breadcrumb;
 mod file_view;
+mod logging;
 mod model;
 mod navigation;
 mod sidebar;

@@ -331,16 +331,16 @@ impl WrenWindow {
             }
         };
 
-        eprintln!(
-            "[wren] symlink: {} -> {}",
+        crate::wren_log!(
+            "symlink: {} -> {}",
             link_path.display(),
             target_path.display()
         );
         match std::os::unix::fs::symlink(&target_path, &link_path) {
             Ok(()) => self.reload(),
             Err(e) => {
-                eprintln!(
-                    "[wren] symlink failed: {} -> {}: {e}",
+                crate::wren_log!(
+                    "symlink failed: {} -> {}: {e}",
                     link_path.display(),
                     target_path.display()
                 );

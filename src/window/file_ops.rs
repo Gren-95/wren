@@ -6,8 +6,9 @@
 use gtk4::prelude::*;
 
 // ── Operation logging ─────────────────────────────────────────────────────
-// Stderr output for every destructive file action so users running from a
-// terminal can see exactly what is being done.
+// Routed through the `wren_log!` macro: gated by the Settings → "Debug
+// logging" switch. When the toggle is off, both helpers reduce to a
+// single relaxed atomic load + branch.
 
 pub fn fmt_path(f: &gio::File) -> String {
     f.path()
@@ -17,8 +18,8 @@ pub fn fmt_path(f: &gio::File) -> String {
 
 pub fn log_op(action: &str, src: &gio::File, dest: Option<&gio::File>) {
     match dest {
-        Some(d) => eprintln!("[wren] {action}: {} -> {}", fmt_path(src), fmt_path(d)),
-        None => eprintln!("[wren] {action}: {}", fmt_path(src)),
+        Some(d) => crate::wren_log!("{action}: {} -> {}", fmt_path(src), fmt_path(d)),
+        None => crate::wren_log!("{action}: {}", fmt_path(src)),
     }
 }
 
@@ -29,12 +30,12 @@ pub fn log_err(
     err: &impl std::fmt::Display,
 ) {
     match dest {
-        Some(d) => eprintln!(
-            "[wren] {action} failed: {} -> {}: {err}",
+        Some(d) => crate::wren_log!(
+            "{action} failed: {} -> {}: {err}",
             fmt_path(src),
             fmt_path(d)
         ),
-        None => eprintln!("[wren] {action} failed: {}: {err}", fmt_path(src)),
+        None => crate::wren_log!("{action} failed: {}: {err}", fmt_path(src)),
     }
 }
 

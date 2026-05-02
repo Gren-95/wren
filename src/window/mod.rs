@@ -493,7 +493,7 @@ impl WrenWindow {
                     *tab.dir_monitor.borrow_mut() = Some(monitor);
                 }
             }
-            Err(e) => eprintln!("Cannot watch directory: {e}"),
+            Err(e) => crate::wren_log!("Cannot watch directory: {e}"),
         }
     }
 
@@ -969,8 +969,8 @@ impl WrenWindow {
                         #[weak]
                         window,
                         async move {
-                            eprintln!(
-                                "[wren] rename: {} -> {}",
+                            crate::wren_log!(
+                                "rename: {} -> {}",
                                 fmt_path(&file),
                                 new_name
                             );
@@ -992,8 +992,8 @@ impl WrenWindow {
                                     window.reload();
                                 }
                                 Err(e) => {
-                                    eprintln!(
-                                        "[wren] rename failed: {}: {e}",
+                                    crate::wren_log!(
+                                        "rename failed: {}: {e}",
                                         fmt_path(&file)
                                     );
                                     window.show_toast(&format!("Could not rename: {e}"))
@@ -1358,6 +1358,31 @@ impl WrenWindow {
         cache_group.add(&cache_row);
         page.add(&cache_group);
 
+        // Advanced group
+        let advanced_group = adw::PreferencesGroup::new();
+        advanced_group.set_title("Advanced");
+
+        let log_row = adw::SwitchRow::new();
+        log_row.set_title("Debug logging");
+        log_row.set_subtitle("Print every action and file operation to stderr");
+        let initial_log = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.debug_logging())
+            .unwrap_or(false);
+        log_row.set_active(initial_log);
+        log_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_debug_logging(row.is_active());
+                }
+            }
+        ));
+        advanced_group.add(&log_row);
+        page.add(&advanced_group);
+
         dialog.add(&page);
         dialog.present(Some(self));
     }
@@ -1461,8 +1486,8 @@ impl WrenWindow {
                 old_name,
                 new_name,
             } => {
-                eprintln!(
-                    "[wren] undo rename: {} -> {}",
+                crate::wren_log!(
+                    "undo rename: {} -> {}",
                     fmt_path(&file),
                     old_name
                 );
@@ -1524,8 +1549,8 @@ impl WrenWindow {
                 old_name,
                 new_name,
             } => {
-                eprintln!(
-                    "[wren] redo rename: {} -> {}",
+                crate::wren_log!(
+                    "redo rename: {} -> {}",
                     fmt_path(&file),
                     new_name
                 );

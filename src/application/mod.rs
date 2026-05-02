@@ -88,4 +88,11 @@ impl WrenApplication {
         }
         self.imp().save_settings();
     }
+
+    pub fn debug_logging(&self) -> bool { self.imp().debug_logging.get() }
+    pub fn set_debug_logging(&self, v: bool) {
+        self.imp().debug_logging.set(v);
+        crate::logging::set_enabled(v);
+        self.imp().save_settings();
+    }
 }
