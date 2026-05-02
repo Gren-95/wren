@@ -1374,6 +1374,24 @@ impl WrenWindow {
                 #[upgrade_or] (),
                 move |idx: usize| {
                     let Some(app) = apps.get(idx) else { return };
+                    // Terminal apps (Terminal=true in the .desktop file) need
+                    // to be run inside a terminal emulator. glib's built-in
+                    // launcher only knows a hardcoded list of terminals
+                    // (gnome-terminal, xterm, …) so user-configured ones
+                    // like kitty / alacritty / wezterm fail with "Unable to
+                    // find terminal required for application". Detect this
+                    // case and fall back to spawning through the terminal
+                    // we already use for "Open in Terminal".
+                    if window.app_needs_terminal(app) {
+                        if window.launch_terminal_app(app, &files) {
+                            return;
+                        }
+                        window.show_toast(&format!(
+                            "Could not launch {}: no terminal configured",
+                            app.display_name()
+                        ));
+                        return;
+                    }
                     let uris: Vec<_> = files.iter().map(|f| f.uri()).collect();
                     let uri_strs: Vec<&str> = uris.iter().map(|u| u.as_str()).collect();
                     if let Err(e) = app.launch_uris(&uri_strs, gio::AppLaunchContext::NONE) {
@@ -1617,6 +1635,77 @@ impl WrenWindow {
         if !self.launch_terminal_at(&path) {
             self.show_toast("No terminal application found");
         }
+    }
+
+    /// True if `app`'s .desktop file declares `Terminal=true`. Reads the
+    /// .desktop directly because gio-rs doesn't expose
+    /// gio::DesktopAppInfo::needs_terminal.
+    fn app_needs_terminal(&self, app: &gio::AppInfo) -> bool {
+        let Some(id) = app.id() else { return false };
+        let Some(path) = locate_desktop_file(&id) else { return false };
+        let kf = glib::KeyFile::new();
+        if kf.load_from_file(&path, glib::KeyFileFlags::NONE).is_err() {
+            return false;
+        }
+        kf.boolean("Desktop Entry", "Terminal").unwrap_or(false)
+    }
+
+    /// Run a Terminal=true application by wrapping the .desktop Exec line
+    /// in the user's preferred terminal. Returns false only when no
+    /// terminal binary can be located.
+    fn launch_terminal_app(&self, app: &gio::AppInfo, files: &[gio::File]) -> bool {
+        // Strip Exec= placeholders (%f, %F, %u, %U, %i, %c, %k, %%) per
+        // the FreeDesktop spec — we'll append actual paths ourselves.
+        let raw_exec = app
+            .commandline()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if raw_exec.is_empty() { return false; }
+        let exec = raw_exec
+            .split_whitespace()
+            .filter(|tok| !tok.starts_with('%'))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut command = exec;
+        for f in files {
+            let arg = f
+                .path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| f.uri().to_string());
+            command.push(' ');
+            command.push_str(&shell_escape(&arg));
+        }
+
+        // Mirror launch_terminal_at's terminal selection: prefer the
+        // user's configured terminal_cmd, fall back to a known list.
+        let custom = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.terminal_cmd())
+            .unwrap_or_default();
+        let candidates: Vec<&str> = if !custom.is_empty() {
+            vec![custom.as_str()]
+        } else {
+            vec!["kitty", "alacritty", "wezterm", "kgx", "gnome-terminal", "konsole", "xterm"]
+        };
+
+        for term in candidates {
+            // gnome-terminal needs `--`, most others use `-e`. Try -e
+            // first since it's the broadly-supported flag, then `--`.
+            for sep in ["-e", "--"] {
+                if std::process::Command::new(term)
+                    .arg(sep)
+                    .arg("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .spawn()
+                    .is_ok()
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn launch_terminal_at(&self, path: &std::path::Path) -> bool {
@@ -2235,4 +2324,41 @@ fn is_typeahead_char(ch: char) -> bool {
         return true;
     }
     matches!(ch, '.' | '_' | '-' | ' ' | '(' | ')' | '\'' | ',')
+}
+
+// Look up a .desktop file by id (e.g. "ranger.desktop") in the
+// standard XDG application directories. Returns the first match,
+// matching gio's own resolution order.
+fn locate_desktop_file(id: &str) -> Option<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    let user = glib::user_data_dir();
+    dirs.push(user.join("applications"));
+    for sys in glib::system_data_dirs() {
+        dirs.push(sys.join("applications"));
+    }
+    for d in dirs {
+        let candidate = d.join(id);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+// Single-quote a string for safe interpolation into a shell command.
+// Used to wrap file paths when we shell out to a terminal emulator
+// running `sh -c "<exec> <arg>…"`. Embedded single quotes are
+// closed-out via `'\''`.
+fn shell_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
 }
