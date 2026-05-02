@@ -244,3 +244,96 @@ fn friendly_name_for(file: &gio::File) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "/".to_string())
 }
+
+// Tab-complete the path in the entry against the local filesystem.
+// - Splits the entry text into a parent dir + partial basename.
+// - Lists matching entries in the parent dir.
+// - On a single match: replaces with the full path (and trailing /
+//   if it's a directory).
+// - On multiple matches: extends to the longest common prefix.
+//
+// Only handles absolute local paths (those starting with `/` or `~`).
+// URIs and relative paths are ignored — the entry already supports
+// pasting full URIs and committing them with Enter.
+pub(crate) fn complete_path(entry: &gtk4::Entry) {
+    let raw = entry.text().to_string();
+    let expanded = expand_tilde(&raw);
+    if !expanded.starts_with('/') {
+        return;
+    }
+    let path = std::path::Path::new(&expanded);
+    let (parent, partial) = if expanded.ends_with('/') {
+        (path, "")
+    } else {
+        match (path.parent(), path.file_name().and_then(|s| s.to_str())) {
+            (Some(p), Some(name)) => (p, name),
+            _ => return,
+        }
+    };
+
+    let entries = match std::fs::read_dir(parent) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let mut matches: Vec<(String, bool)> = Vec::new();
+    for ent in entries.flatten() {
+        let name = match ent.file_name().into_string() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if !name.starts_with(partial) {
+            continue;
+        }
+        let is_dir = ent
+            .file_type()
+            .map(|t| t.is_dir() || t.is_symlink())
+            .unwrap_or(false);
+        matches.push((name, is_dir));
+    }
+    if matches.is_empty() { return; }
+    matches.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let new_basename = if matches.len() == 1 {
+        let (name, is_dir) = &matches[0];
+        if *is_dir {
+            format!("{name}/")
+        } else {
+            name.clone()
+        }
+    } else {
+        // Longest common prefix among all matches.
+        let mut prefix = matches[0].0.clone();
+        for (name, _) in matches.iter().skip(1) {
+            let common: String = prefix
+                .chars()
+                .zip(name.chars())
+                .take_while(|(a, b)| a == b)
+                .map(|(a, _)| a)
+                .collect();
+            prefix = common;
+            if prefix.is_empty() { break; }
+        }
+        if prefix.len() == partial.len() {
+            // Already at the longest common prefix — nothing to add.
+            return;
+        }
+        prefix
+    };
+
+    let new_text = parent
+        .join(&new_basename)
+        .to_string_lossy()
+        .into_owned();
+    entry.set_text(&new_text);
+    entry.set_position(-1);
+}
+
+fn expand_tilde(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix("~/") {
+        glib::home_dir().join(rest).to_string_lossy().into_owned()
+    } else if s == "~" {
+        glib::home_dir().to_string_lossy().into_owned()
+    } else {
+        s.to_string()
+    }
+}

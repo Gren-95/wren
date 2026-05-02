@@ -51,11 +51,16 @@ impl ObjectImpl for WrenBreadcrumbBar {
         key_ctrl.connect_key_pressed(glib::clone!(
             #[weak]
             obj,
+            #[weak(rename_to = entry)]
+            self.path_entry,
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, key, _, _| {
                 if key == gtk4::gdk::Key::Escape {
                     obj.leave_edit_mode();
+                    glib::Propagation::Stop
+                } else if key == gtk4::gdk::Key::Tab {
+                    super::complete_path(&entry);
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
