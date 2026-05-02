@@ -188,44 +188,21 @@ button.wren-sidebar-toggle:hover {
 }
 
 /* ── Path-suggestion popover ──────────────────────────────────────────────
-   Strategy: make the GtkPopover wrapper entirely invisible (no
-   background, no border, no shadow, no padding) and put all the
-   visual styling on an inner Box (.wren-suggest-card). Lets us
-   control the shape/shadow/colour without fighting Adwaita's popover
-   theme. */
-.wren-suggest-popover,
-.wren-suggest-popover > contents {
-  background: transparent;
-  background-color: transparent;
-  box-shadow: none;
-  border: none;
+   Mirrors Epiphany URL-bar suggestions verbatim — `.menu .suggestions`
+   classes on a plain GtkPopover, light row paddings + hover/selected
+   fills, no other overrides. The popover keeps Adwaita's default
+   rounded corners and soft shadow so it reads as a polished
+   menu-style dropdown contextually attached to the entry above. */
+popover.suggestions {
+  padding: 6px 9px;
+}
+popover.suggestions list > row {
   padding: 0;
-  margin: 0;
 }
-
-.wren-suggest-card {
-  background-color: @view_bg_color;
-  color: @view_fg_color;
-  border-radius: 0 0 14px 14px;
-  border: 1px solid alpha(currentColor, 0.10);
-  border-top: none; /* clean seam with the entry above */
-  box-shadow: 0 6px 12px alpha(black, 0.18);
-  padding: 6px 0;
+popover.suggestions list > row:hover {
+  background-color: alpha(currentColor, 0.04);
 }
-
-.wren-suggest-list,
-.wren-suggest-list > row {
-  background: transparent;
-}
-.wren-suggest-list > row {
-  padding: 0;
-  transition: background-color 80ms ease;
-}
-.wren-suggest-list > row:hover {
-  background-color: alpha(currentColor, 0.06);
-}
-.wren-suggest-list > row:selected {
+popover.suggestions list > row:selected {
   background-color: alpha(currentColor, 0.10);
-  color: inherit;
 }
 

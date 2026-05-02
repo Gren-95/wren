@@ -43,21 +43,21 @@ impl ObjectImpl for WrenBreadcrumbBar {
         self.parent_constructed();
         let obj = self.obj();
 
-        // Suggestions popover. We make the popover wrapper itself
-        // fully transparent (no chrome) and put all the visible
-        // styling on an inner Box — this sidesteps Adwaita's
-        // built-in popover theme (rounded corners + shadow +
-        // padding) which made the dropdown look identical to a
-        // right-click menu no matter what we tried to override.
+        // Mirrors Epiphany's URL-bar suggestions popover (see
+        // src/ephy-location-entry.c update_suggestions_popover):
+        // .menu + .suggestions style classes, has-arrow disabled,
+        // autohide off (we drive show/hide explicitly), parented to
+        // the entry. Width is forced to the entry's width via
+        // set_size_request on the popover itself in
+        // refresh_suggestions — this is what gives the
+        // visually-attached look.
         let popover = gtk4::Popover::new();
         popover.set_autohide(false);
         popover.set_position(gtk4::PositionType::Bottom);
         popover.set_has_arrow(false);
-        popover.add_css_class("wren-suggest-popover");
+        popover.add_css_class("menu");
+        popover.add_css_class("suggestions");
         popover.set_can_focus(false);
-
-        let card = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        card.add_css_class("wren-suggest-card");
 
         let scroll = gtk4::ScrolledWindow::new();
         scroll.set_max_content_height(320);
@@ -68,10 +68,8 @@ impl ObjectImpl for WrenBreadcrumbBar {
         let list = gtk4::ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
         list.set_can_focus(false);
-        list.add_css_class("wren-suggest-list");
         scroll.set_child(Some(&list));
-        card.append(&scroll);
-        popover.set_child(Some(&card));
+        popover.set_child(Some(&scroll));
         popover.set_parent(&*self.path_entry);
 
         // Click on a row → fill the entry with that name and continue.
@@ -232,20 +230,15 @@ impl WrenBreadcrumbBar {
         let Some(list) = self.suggest_list.borrow().clone() else { return };
         let Some(popover) = self.suggest_popover.borrow().clone() else { return };
 
-        // Match the popover's content width to the entry's so it sits
-        // flush under the bar — entry + dropdown read as one combined
-        // control (datalist / <select> style). entry.width() is 0
-        // before realization; skip in that case and the next
-        // refresh will pick the right width up.
+        // Force the popover itself to be exactly the entry's width —
+        // the same trick Epiphany uses (gtk_widget_set_size_request
+        // on the popover in update_suggestions_popover). Setting
+        // width on the inner ScrolledWindow leaves the popover's
+        // own padding/border outside that, so it ends up wider than
+        // the entry; setting it on the popover wraps the chrome too.
         let entry_width = entry.width();
         if entry_width > 0 {
-            if let Some(scroll) = popover
-                .child()
-                .and_then(|c| c.downcast::<gtk4::ScrolledWindow>().ok())
-            {
-                scroll.set_min_content_width(entry_width);
-                scroll.set_max_content_width(entry_width);
-            }
+            popover.set_size_request(entry_width, -1);
         }
 
         let raw = entry.text().to_string();
