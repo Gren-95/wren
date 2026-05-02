@@ -1097,7 +1097,8 @@ impl WrenWindow {
     ) {
         let popover = gtk4::Popover::new();
         popover.set_autohide(true);
-        popover.add_css_class("menu");
+        // No `.menu` class — that strips the default padding and the
+        // entry ends up flush against the rounded corners.
 
         let entry = gtk4::Entry::new();
         entry.set_text(&current_name);

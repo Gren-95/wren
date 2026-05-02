@@ -48,6 +48,10 @@ impl ObjectImpl for WrenBreadcrumbBar {
         ));
 
         let key_ctrl = gtk4::EventControllerKey::new();
+        // Capture phase so we get Tab before GtkEntry's inner GtkText
+        // hands it off to the window's focus-traversal logic — Tab
+        // would otherwise move focus instead of completing the path.
+        key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         key_ctrl.connect_key_pressed(glib::clone!(
             #[weak]
             obj,
