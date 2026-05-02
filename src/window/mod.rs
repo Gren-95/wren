@@ -1266,16 +1266,30 @@ impl WrenWindow {
 
     #[allow(deprecated)]
     pub fn open_with(&self) {
+        // Fall back to the current directory when nothing is selected so
+        // right-clicking the empty area of the file view opens a picker
+        // for "this folder" — useful for opening a project dir in an
+        // editor, the current folder in a terminal, etc.
         let objs = self.selected_file_objects();
-        let Some(obj) = objs.first() else { return };
-        // Folders use the synthetic "inode/directory" type; that's a real
-        // mimetype with apps registered against it (file managers, archive
-        // tools, editors that accept directories, …) so we don't bail
-        // early for directories.
-        let content_type = if obj.is_directory() {
-            "inode/directory".to_string()
+        let (files, content_type) = if let Some(obj) = objs.first() {
+            // Folders use the synthetic "inode/directory" type; that's a
+            // real mimetype with apps registered against it (file managers,
+            // archive tools, editors that accept directories, …).
+            let ct = if obj.is_directory() {
+                "inode/directory".to_string()
+            } else {
+                obj.content_type()
+            };
+            let files: Vec<gio::File> = objs.iter().map(|o| o.file().clone()).collect();
+            (files, ct)
         } else {
-            obj.content_type()
+            let Some(idx) = self.current_tab_index() else { return };
+            let tabs = self.imp().tabs.borrow();
+            let Some(loc) = tabs.get(idx).and_then(|t| t.navigation.current().cloned()) else {
+                return;
+            };
+            drop(tabs);
+            (vec![loc], "inode/directory".to_string())
         };
         if content_type.is_empty() {
             self.show_toast("Unknown file type");
@@ -1291,14 +1305,17 @@ impl WrenWindow {
 
         // Build the picker manually — GtkAppChooserDialog has been
         // deprecated since GTK 4.10 and is non-functional on 4.18+.
-        let dialog = adw::AlertDialog::new(
-            Some("Open With"),
-            Some(&format!(
-                "Choose an application to open the {} file{}",
-                objs.len(),
-                if objs.len() == 1 { "" } else { "s" },
-            )),
-        );
+        let body = match files.len() {
+            1 => format!(
+                "Choose an application to open “{}”",
+                files[0]
+                    .basename()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| files[0].uri().to_string())
+            ),
+            n => format!("Choose an application to open the {n} files"),
+        };
+        let dialog = adw::AlertDialog::new(Some("Open With"), Some(&body));
 
         let list = gtk4::ListBox::new();
         list.add_css_class("boxed-list");
@@ -1344,8 +1361,6 @@ impl WrenWindow {
         dialog.set_response_appearance("open", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("open"));
         dialog.set_close_response("cancel");
-
-        let files: Vec<gio::File> = objs.iter().map(|o| o.file().clone()).collect();
 
         // The launcher takes a row index and runs the open. Shared by the
         // "Open" button (via connect_response) and double-click / Enter on
@@ -1835,7 +1850,9 @@ impl WrenWindow {
         // Delete key naturally becomes "purge selected" — matching
         // Nautilus.
         self.action_set_enabled("win.open-selection", has_selection);
-        self.action_set_enabled("win.open-with", has_selection);
+        // Open With falls back to the current directory when no file is
+        // selected, so it stays available on the empty-area context menu.
+        self.action_set_enabled("win.open-with", true);
         self.action_set_enabled("win.delete-permanently", has_selection);
         self.action_set_enabled("win.move-to-trash", has_selection);
         for action in &[
