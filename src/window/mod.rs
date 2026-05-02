@@ -814,59 +814,6 @@ impl WrenWindow {
         false
     }
 
-    /// Wire up the path-suggestion overlay panel. Called once after
-    /// the window is constructed:
-    ///   - move the breadcrumb's suggestion ListBox into the
-    ///     overlay panel,
-    ///   - install a get-child-position handler that places the
-    ///     panel directly below the path entry, sized to its width,
-    ///     every time the overlay re-allocates.
-    /// Pure non-popover floating panel — no GtkPopover machinery.
-    pub fn setup_path_suggestions(&self) {
-        let imp = self.imp();
-        let panel: gtk4::Box = imp.suggest_panel.clone();
-        imp.breadcrumb_bar.attach_suggest_panel(&panel);
-        let entry = imp.breadcrumb_bar.path_entry();
-
-        imp.root_overlay.connect_get_child_position(glib::clone!(
-            #[strong] entry,
-            move |overlay, child| {
-                if !child.is_visible() { return None; }
-                if !child.has_css_class("wren-suggest-panel") {
-                    return None;
-                }
-                // Bail out until the entry has actually been laid out;
-                // returning None here lets GTK fall back to halign /
-                // valign and on the *next* allocation we'll get a
-                // sensible width.
-                let raw_width = entry.width();
-                if raw_width < 80 { return None; }
-                // Clamp to a reasonable minimum so paths don't get
-                // truncated to "..." in narrow windows. The panel can
-                // overhang the entry's right edge a few px when this
-                // hits — still preferable to ellipsised suggestions.
-                let panel_width = raw_width.max(360);
-                let height = child
-                    .measure(gtk4::Orientation::Vertical, panel_width)
-                    .1
-                    .max(0);
-                let bottom_left = gtk4::graphene::Point::new(
-                    0.0,
-                    entry.height() as f32,
-                );
-                let p = entry
-                    .compute_point(overlay, &bottom_left)
-                    .unwrap_or(bottom_left);
-                Some(gtk4::gdk::Rectangle::new(
-                    p.x() as i32,
-                    p.y() as i32,
-                    panel_width,
-                    height,
-                ))
-            }
-        ));
-    }
-
     pub fn setup_search(&self) {
         let imp = self.imp();
 

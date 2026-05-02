@@ -26,34 +26,6 @@ impl WrenBreadcrumbBar {
         imp::WrenBreadcrumbBar::from_obj(self)
     }
 
-    /// Returns the path entry so the host window can wire up a
-    /// GtkOverlay::get-child-position handler against it.
-    pub fn path_entry(&self) -> gtk4::Entry {
-        self.imp().path_entry.clone()
-    }
-
-    /// Move the suggestions list (built in constructed) into the
-    /// host window's overlay panel. Called once, after the WrenWindow
-    /// finishes constructing — at that point both this widget and
-    /// `panel` are realised and share the same root.
-    pub fn attach_suggest_panel(&self, panel: &gtk4::Box) {
-        let imp = self.imp();
-        let Some(list) = imp.suggest_list.borrow().clone() else { return };
-
-        let scroll = gtk4::ScrolledWindow::new();
-        scroll.set_max_content_height(320);
-        scroll.set_propagate_natural_height(true);
-        scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-        scroll.set_child(Some(&list));
-
-        // Clear any previous content (re-attach is idempotent).
-        while let Some(child) = panel.first_child() {
-            panel.remove(&child);
-        }
-        panel.append(&scroll);
-        imp.suggest_panel.replace(Some(panel.clone()));
-    }
-
     pub fn set_location(&self, file: &gio::File) {
         let imp = self.imp();
         imp.current_location.replace(Some(file.clone()));
@@ -228,7 +200,6 @@ impl WrenBreadcrumbBar {
     }
 
     pub fn leave_edit_mode(&self) {
-        self.imp().hide_suggestions();
         self.imp().mode_stack.set_visible_child_name("crumbs");
     }
 
@@ -285,15 +256,27 @@ fn friendly_name_for(file: &gio::File) -> String {
         .unwrap_or_else(|| "/".to_string())
 }
 
-// Returns up to `limit` matching directory entries from the parent of
-// the path in `raw`, sorted alphabetically. Empty when the path
-// doesn't refer to a real local parent dir (relative paths, URIs,
-// missing parents).
-//
-// Files are intentionally excluded — the path entry navigates folders,
-// so suggesting a file would lead nowhere useful. Symlinks are
-// resolved through metadata() (vs symlink_metadata()) so directory
-// symlinks still appear as suggestions.
+/// The "typed path" — the literal raw text up to and including the
+/// last `/`. Mirrors Nautilus' `data->typed_path`. The completion
+/// strings stored in the model are built as `typed_path + basename`
+/// so the dim-prefix offset is exactly `typed_path.len()`.
+pub(crate) fn typed_path_for_completion(raw: &str) -> String {
+    match raw.rfind('/') {
+        Some(i) => raw[..=i].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Returns up to `limit` matching entries from the parent of the path
+/// in `raw`, sorted alphabetically. Mirrors Nautilus'
+/// `completer_get_completions_thread`:
+///   - case-insensitive prefix match
+///   - hidden dotfiles only when the user has typed a leading `.`
+///   - files included (no folder-only filter — Nautilus shows files
+///     too, just without a trailing `/`)
+///   - directory entries reported as `(name, true)`, regular files
+///     as `(name, false)`; the trailing `/` is appended by the
+///     caller when building the completion string.
 pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
     let expanded = expand_tilde(raw);
     if !expanded.starts_with('/') {
@@ -313,136 +296,29 @@ pub(crate) fn list_completions(raw: &str, limit: usize) -> Vec<(String, bool)> {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
-    // Hidden directories (.cache, .config, …) clutter typical home-dir
-    // suggestions. Surface them only when the user has explicitly
-    // typed a leading dot in the partial.
     let show_hidden = partial.starts_with('.');
+    let partial_cf = partial.to_lowercase();
     let mut matches: Vec<(String, bool)> = Vec::new();
     for ent in entries.flatten() {
         let name = match ent.file_name().into_string() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if !partial.is_empty() && !name.starts_with(&partial) {
-            continue;
-        }
         if !show_hidden && name.starts_with('.') {
             continue;
         }
-        // metadata() follows symlinks so dir-symlinks count as dirs.
-        let Ok(meta) = ent.path().metadata() else { continue };
-        if !meta.is_dir() { continue; }
-        matches.push((name, true));
+        if !partial_cf.is_empty() && !name.to_lowercase().starts_with(&partial_cf) {
+            continue;
+        }
+        let is_dir = ent
+            .file_type()
+            .map(|t| t.is_dir() || (t.is_symlink() && ent.path().metadata().map(|m| m.is_dir()).unwrap_or(false)))
+            .unwrap_or(false);
+        matches.push((name, is_dir));
     }
     matches.sort_by(|a, b| a.0.cmp(&b.0));
     matches.truncate(limit);
     matches
-}
-
-// Replace the partial basename in `text` with `chosen` (a full
-// basename). Returns the new full path string, with trailing `/`
-// when the chosen entry is a directory; None when the input doesn't
-// have a parsable parent dir.
-pub(crate) fn apply_completion(text: &str, chosen: &str) -> Option<String> {
-    let expanded = expand_tilde(text);
-    if !expanded.starts_with('/') { return None; }
-    let path = std::path::Path::new(&expanded);
-    let parent = if expanded.ends_with('/') {
-        path.to_path_buf()
-    } else {
-        path.parent()?.to_path_buf()
-    };
-    let chosen_path = parent.join(chosen);
-    let is_dir = chosen_path
-        .symlink_metadata()
-        .map(|m| m.file_type().is_dir() || m.file_type().is_symlink())
-        .unwrap_or(false);
-    let mut s = chosen_path.to_string_lossy().into_owned();
-    if is_dir && !s.ends_with('/') {
-        s.push('/');
-    }
-    Some(s)
-}
-
-// Tab-complete the path in the entry against the local filesystem.
-// - On a single match: fills the full name (with trailing / for dirs).
-// - On multiple matches: extends to the longest common prefix.
-//
-// Used by the explicit Tab keybinding; the live suggestions popover
-// uses list_completions + apply_completion directly.
-pub(crate) fn complete_path(entry: &gtk4::Entry) {
-    let raw = entry.text().to_string();
-    let matches = list_completions(&raw, usize::MAX);
-    if matches.is_empty() { return; }
-
-    // Compute the partial that's already typed so we know when "no
-    // more characters can be added unambiguously" (longest common
-    // prefix already equals user input — surface the menu instead).
-    let expanded = expand_tilde(&raw);
-    let partial = if expanded.ends_with('/') {
-        String::new()
-    } else {
-        std::path::Path::new(&expanded)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default()
-    };
-
-    let chosen = if matches.len() == 1 {
-        matches[0].0.clone()
-    } else {
-        let mut prefix = matches[0].0.clone();
-        for (name, _) in matches.iter().skip(1) {
-            let common: String = prefix
-                .chars()
-                .zip(name.chars())
-                .take_while(|(a, b)| a == b)
-                .map(|(a, _)| a)
-                .collect();
-            prefix = common;
-            if prefix.is_empty() { break; }
-        }
-        if prefix.len() == partial.len() { return; }
-        prefix
-    };
-
-    if let Some(text) = apply_completion(&raw, &chosen) {
-        entry.set_text(&text);
-        entry.set_position(-1);
-    }
-}
-
-/// Length in bytes of the user's typed input *as it would be expanded
-/// onto disk* — used to align the dimmed prefix in the suggestions
-/// popover. When the user types `~/Doc`, the matched paths begin with
-/// `/home/<user>/Doc`, so the prefix-dimming offset is the length of
-/// the expanded form, not the raw text.
-pub(crate) fn expanded_typed_len(raw: &str) -> usize {
-    expand_tilde(raw).len()
-}
-
-/// Full path string the popover should display for a single match —
-/// expanded parent + chosen basename + trailing `/` for directories.
-/// Returns None when the input doesn't have a parsable parent.
-pub(crate) fn full_completion_path(
-    raw: &str,
-    chosen: &str,
-    is_dir: bool,
-) -> Option<String> {
-    let expanded = expand_tilde(raw);
-    if !expanded.starts_with('/') { return None; }
-    let path = std::path::Path::new(&expanded);
-    let parent = if expanded.ends_with('/') {
-        path.to_path_buf()
-    } else {
-        path.parent()?.to_path_buf()
-    };
-    let mut s = parent.join(chosen).to_string_lossy().into_owned();
-    if is_dir && !s.ends_with('/') {
-        s.push('/');
-    }
-    Some(s)
 }
 
 fn expand_tilde(s: &str) -> String {

@@ -45,17 +45,6 @@ pub struct WrenWindow {
     pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
     #[template_child]
     pub op_button: TemplateChild<gtk4::MenuButton>,
-    /// GtkOverlay wrapping the AdwToolbarView so the path-suggestion
-    /// panel can float over both the header (for the small strip
-    /// between the entry's bottom and the content area) and the
-    /// content itself, without going through GtkPopover at all.
-    #[template_child]
-    pub root_overlay: TemplateChild<gtk4::Overlay>,
-    /// Container for the path-suggestion list. Lives as an overlay
-    /// child on root_overlay; positioned via WrenWindow::position
-    /// _suggest_panel using the path entry's allocation.
-    #[template_child]
-    pub suggest_panel: TemplateChild<gtk4::Box>,
 
     pub tabs: RefCell<Vec<TabState>>,
     pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
@@ -96,8 +85,6 @@ impl Default for WrenWindow {
             view_button: Default::default(),
             breadcrumb_bar: Default::default(),
             op_button: Default::default(),
-            root_overlay: Default::default(),
-            suggest_panel: Default::default(),
             tabs: Default::default(),
             clipboard_files: Default::default(),
             show_hidden: Default::default(),
@@ -742,7 +729,6 @@ impl ObjectImpl for WrenWindow {
         obj.setup_typeahead();
         obj.setup_search();
         obj.setup_volume_monitor();
-        obj.setup_path_suggestions();
         obj.update_selection_actions();
         obj.update_undo_actions();
 
