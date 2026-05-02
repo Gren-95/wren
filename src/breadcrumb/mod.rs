@@ -26,6 +26,34 @@ impl WrenBreadcrumbBar {
         imp::WrenBreadcrumbBar::from_obj(self)
     }
 
+    /// Returns the path entry so the host window can wire up a
+    /// GtkOverlay::get-child-position handler against it.
+    pub fn path_entry(&self) -> gtk4::Entry {
+        self.imp().path_entry.clone()
+    }
+
+    /// Move the suggestions list (built in constructed) into the
+    /// host window's overlay panel. Called once, after the WrenWindow
+    /// finishes constructing — at that point both this widget and
+    /// `panel` are realised and share the same root.
+    pub fn attach_suggest_panel(&self, panel: &gtk4::Box) {
+        let imp = self.imp();
+        let Some(list) = imp.suggest_list.borrow().clone() else { return };
+
+        let scroll = gtk4::ScrolledWindow::new();
+        scroll.set_max_content_height(320);
+        scroll.set_propagate_natural_height(true);
+        scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+        scroll.set_child(Some(&list));
+
+        // Clear any previous content (re-attach is idempotent).
+        while let Some(child) = panel.first_child() {
+            panel.remove(&child);
+        }
+        panel.append(&scroll);
+        imp.suggest_panel.replace(Some(panel.clone()));
+    }
+
     pub fn set_location(&self, file: &gio::File) {
         let imp = self.imp();
         imp.current_location.replace(Some(file.clone()));

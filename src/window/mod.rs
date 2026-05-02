@@ -814,6 +814,55 @@ impl WrenWindow {
         false
     }
 
+    /// Wire up the path-suggestion overlay panel. Called once after
+    /// the window is constructed:
+    ///   - move the breadcrumb's suggestion ListBox into the
+    ///     overlay panel,
+    ///   - install a get-child-position handler that places the
+    ///     panel directly below the path entry, sized to its width,
+    ///     every time the overlay re-allocates.
+    /// Pure non-popover floating panel — no GtkPopover machinery.
+    pub fn setup_path_suggestions(&self) {
+        let imp = self.imp();
+        let panel: gtk4::Box = imp.suggest_panel.clone();
+        imp.breadcrumb_bar.attach_suggest_panel(&panel);
+        let entry = imp.breadcrumb_bar.path_entry();
+
+        imp.root_overlay.connect_get_child_position(glib::clone!(
+            #[strong] entry,
+            move |overlay, child| {
+                if !child.is_visible() { return None; }
+                // Only care about positioning *our* panel; let any
+                // other overlay child use its own halign/valign.
+                if !child.has_css_class("wren-suggest-panel") {
+                    return None;
+                }
+                let entry_width = entry.width();
+                if entry_width <= 0 { return None; }
+                let height = child
+                    .measure(gtk4::Orientation::Vertical, entry_width)
+                    .1
+                    .max(0);
+                // Where does the entry's bottom-left corner land in
+                // the overlay's coordinate space? compute_point handles
+                // the breadcrumb→header→overlay walk for us.
+                let bottom_left = gtk4::graphene::Point::new(
+                    0.0,
+                    entry.height() as f32,
+                );
+                let p = entry
+                    .compute_point(overlay, &bottom_left)
+                    .unwrap_or(bottom_left);
+                Some(gtk4::gdk::Rectangle::new(
+                    p.x() as i32,
+                    p.y() as i32,
+                    entry_width,
+                    height,
+                ))
+            }
+        ));
+    }
+
     pub fn setup_search(&self) {
         let imp = self.imp();
 

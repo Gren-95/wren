@@ -187,27 +187,35 @@ button.wren-sidebar-toggle:hover {
   color: alpha(currentColor, 0.55);
 }
 
-/* ── Path-suggestion popover ──────────────────────────────────────────────
-   Nautilus-style inline completion: each row is a single line of
-   text showing the *full* path the match would expand to, with the
-   already-typed prefix dimmed and the completion bright. Each row
-   carries its own margins, so we keep the popover chrome minimal. */
-popover.suggestions {
-  padding: 4px;
+/* ── Path-suggestion panel ───────────────────────────────────────────────
+   Floating Box hosted in WrenWindow's GtkOverlay (NOT a GtkPopover).
+   Positioned by setup_path_suggestions to sit directly below the
+   path entry, at the entry's width. Owning our own widget means we
+   can style it however we want without fighting Adwaita's popover
+   theme — and it can't behave like a context menu, because it
+   isn't one. */
+.wren-suggest-panel {
+  background-color: @view_bg_color;
+  color: @view_fg_color;
+  border-radius: 0 0 12px 12px;
+  border: 1px solid alpha(currentColor, 0.10);
+  border-top: none;
+  box-shadow: 0 6px 14px alpha(black, 0.18);
+  padding: 4px 0;
 }
-popover.suggestions list,
-popover.suggestions list > row {
+.wren-suggest-panel list,
+.wren-suggest-panel list > row {
   background: transparent;
 }
-popover.suggestions list > row {
+.wren-suggest-panel list > row {
   padding: 0;
-  border-radius: 6px;
+  border-radius: 0;
   transition: background-color 80ms ease;
 }
-popover.suggestions list > row:hover {
+.wren-suggest-panel list > row:hover {
   background-color: alpha(currentColor, 0.06);
 }
-popover.suggestions list > row:selected {
+.wren-suggest-panel list > row:selected {
   background-color: alpha(currentColor, 0.10);
   color: inherit;
 }

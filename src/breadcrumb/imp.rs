@@ -15,11 +15,14 @@ pub struct WrenBreadcrumbBar {
     #[template_child]
     pub path_entry: TemplateChild<gtk4::Entry>,
     pub current_location: RefCell<Option<gio::File>>,
-    /// Suggestions popover lazily created in `constructed`. Shows
-    /// matching entries from the parent dir as the user types in the
-    /// path entry.
-    pub suggest_popover: RefCell<Option<gtk4::Popover>>,
+    /// Suggestions list. Lives inside the WrenWindow's overlay panel
+    /// (set up by WrenWindow::setup_path_suggestions). We keep a
+    /// reference here so refresh_suggestions can rebuild rows.
     pub suggest_list: RefCell<Option<gtk4::ListBox>>,
+    /// The Box that floats over the file view (a child of the
+    /// window's GtkOverlay). Toggled visible/invisible from
+    /// refresh_suggestions / hide_suggestions.
+    pub suggest_panel: RefCell<Option<gtk4::Box>>,
 }
 
 #[glib::object_subclass]
@@ -43,34 +46,14 @@ impl ObjectImpl for WrenBreadcrumbBar {
         self.parent_constructed();
         let obj = self.obj();
 
-        // Mirrors Epiphany's URL-bar suggestions popover (see
-        // src/ephy-location-entry.c update_suggestions_popover):
-        // .menu + .suggestions style classes, has-arrow disabled,
-        // autohide off (we drive show/hide explicitly), parented to
-        // the entry. Width is forced to the entry's width via
-        // set_size_request on the popover itself in
-        // refresh_suggestions — this is what gives the
-        // visually-attached look.
-        let popover = gtk4::Popover::new();
-        popover.set_autohide(false);
-        popover.set_position(gtk4::PositionType::Bottom);
-        popover.set_has_arrow(false);
-        popover.add_css_class("menu");
-        popover.add_css_class("suggestions");
-        popover.set_can_focus(false);
-
-        let scroll = gtk4::ScrolledWindow::new();
-        scroll.set_max_content_height(320);
-        scroll.set_propagate_natural_width(true);
-        scroll.set_propagate_natural_height(true);
-        scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-
+        // No GtkPopover — the suggestions list lives in the WrenWindow's
+        // root_overlay so we control positioning, sizing, and chrome
+        // entirely through CSS on a regular GtkBox. The list itself is
+        // built lazily in attach_suggestions_to_overlay (called by
+        // WrenWindow once both widgets exist in the same hierarchy).
         let list = gtk4::ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
         list.set_can_focus(false);
-        scroll.set_child(Some(&list));
-        popover.set_child(Some(&scroll));
-        popover.set_parent(&*self.path_entry);
 
         // Click on a row → fill the entry with that name and continue.
         list.connect_row_activated(glib::clone!(
@@ -85,7 +68,6 @@ impl ObjectImpl for WrenBreadcrumbBar {
             }
         ));
 
-        self.suggest_popover.replace(Some(popover.clone()));
         self.suggest_list.replace(Some(list.clone()));
 
         // Activate (Enter): if a suggestion is highlighted, accept it
@@ -98,9 +80,9 @@ impl ObjectImpl for WrenBreadcrumbBar {
             move |entry| {
                 let imp = imp_self.imp();
                 let list = imp.suggest_list.borrow();
-                let popover = imp.suggest_popover.borrow();
-                if let (Some(list), Some(popover)) = (list.as_ref(), popover.as_ref()) {
-                    if popover.is_visible() {
+                let panel = imp.suggest_panel.borrow();
+                if let (Some(list), Some(panel)) = (list.as_ref(), panel.as_ref()) {
+                    if panel.is_visible() {
                         if let Some(row) = list.selected_row() {
                             let name = row.widget_name().to_string();
                             if !name.is_empty() {
@@ -145,14 +127,14 @@ impl ObjectImpl for WrenBreadcrumbBar {
             glib::Propagation::Proceed,
             move |_, key, _, _| {
                 let imp = imp_self.imp();
-                let popover_visible = imp
-                    .suggest_popover
+                let panel_visible = imp
+                    .suggest_panel
                     .borrow()
                     .as_ref()
                     .is_some_and(|p| p.is_visible());
                 match key {
                     gtk4::gdk::Key::Escape => {
-                        if popover_visible {
+                        if panel_visible {
                             imp.hide_suggestions();
                             glib::Propagation::Stop
                         } else {
@@ -164,11 +146,11 @@ impl ObjectImpl for WrenBreadcrumbBar {
                         super::complete_path(&entry);
                         glib::Propagation::Stop
                     }
-                    gtk4::gdk::Key::Down if popover_visible => {
+                    gtk4::gdk::Key::Down if panel_visible => {
                         imp.move_selection(1);
                         glib::Propagation::Stop
                     }
-                    gtk4::gdk::Key::Up if popover_visible => {
+                    gtk4::gdk::Key::Up if panel_visible => {
                         imp.move_selection(-1);
                         glib::Propagation::Stop
                     }
@@ -218,9 +200,8 @@ impl ObjectImpl for WrenBreadcrumbBar {
     }
 
     fn dispose(&self) {
-        if let Some(popover) = self.suggest_popover.take() {
-            popover.unparent();
-        }
+        // The suggest list / panel are owned by the WrenWindow's
+        // root_overlay, not by us — nothing to unparent here.
         self.obj().first_child().map(|child| child.unparent());
     }
 }
@@ -228,18 +209,7 @@ impl ObjectImpl for WrenBreadcrumbBar {
 impl WrenBreadcrumbBar {
     pub fn refresh_suggestions(&self, entry: &gtk4::Entry) {
         let Some(list) = self.suggest_list.borrow().clone() else { return };
-        let Some(popover) = self.suggest_popover.borrow().clone() else { return };
-
-        // Force the popover itself to be exactly the entry's width —
-        // the same trick Epiphany uses (gtk_widget_set_size_request
-        // on the popover in update_suggestions_popover). Setting
-        // width on the inner ScrolledWindow leaves the popover's
-        // own padding/border outside that, so it ends up wider than
-        // the entry; setting it on the popover wraps the chrome too.
-        let entry_width = entry.width();
-        if entry_width > 0 {
-            popover.set_size_request(entry_width, -1);
-        }
+        let Some(panel) = self.suggest_panel.borrow().clone() else { return };
 
         let raw = entry.text().to_string();
         let matches = super::list_completions(&raw, 50);
@@ -262,7 +232,7 @@ impl WrenBreadcrumbBar {
         }
 
         if matches.is_empty() {
-            popover.popdown();
+            panel.set_visible(false);
             return;
         }
 
@@ -311,14 +281,19 @@ impl WrenBreadcrumbBar {
                 list.select_row(Some(&first));
             }
         }
-        if !popover.is_visible() {
-            popover.popup();
+        if !panel.is_visible() {
+            panel.set_visible(true);
+        }
+        // Trigger an overlay re-allocation so the panel re-positions
+        // to the entry's current bounds (window resize, scroll, etc.).
+        if let Some(parent) = panel.parent() {
+            parent.queue_resize();
         }
     }
 
     pub fn hide_suggestions(&self) {
-        if let Some(popover) = self.suggest_popover.borrow().clone() {
-            popover.popdown();
+        if let Some(panel) = self.suggest_panel.borrow().clone() {
+            panel.set_visible(false);
         }
     }
 
