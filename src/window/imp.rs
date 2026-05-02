@@ -500,10 +500,6 @@ impl ObjectImpl for WrenWindow {
         edit_section.append(Some("Redo"), Some("win.redo"));
         hamburger.append_section(None, &edit_section);
 
-        let trash_section = gio::Menu::new();
-        trash_section.append(Some("Empty Trash"), Some("win.empty-trash"));
-        hamburger.append_section(None, &trash_section);
-
         let settings_section = gio::Menu::new();
         settings_section.append(Some("Settings…"), Some("win.open-settings"));
         hamburger.append_section(None, &settings_section);
