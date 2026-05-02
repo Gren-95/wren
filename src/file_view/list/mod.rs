@@ -306,19 +306,18 @@ impl WrenFileList {
 
     pub fn setup_context_menu(&self, menu: &gio::MenuModel) {
         let imp = imp::WrenFileList::from_obj(self);
-        // Build a fresh PopoverMenu on every right-click and have it
-        // unparent itself on close. The alternative — a long-lived
-        // popover parented to the view — leaks at window dispose
-        // because the view never unparents its child popover.
-        let view = imp.list_view.clone();
-        let menu = menu.clone();
+        let popover = gtk4::PopoverMenu::from_model(Some(menu));
+        popover.set_has_arrow(false);
+        popover.set_parent(&imp.list_view);
+        // Detach the popover when the view is being torn down so it
+        // doesn't show up as a leftover child during finalize.
+        imp.list_view.connect_unrealize(glib::clone!(
+            #[strong] popover,
+            move |_| popover.unparent()
+        ));
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(move |_, _, x, y| {
-            let popover = gtk4::PopoverMenu::from_model(Some(&menu));
-            popover.set_has_arrow(false);
-            popover.set_parent(&view);
-            popover.connect_closed(|p| p.unparent());
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
                 x as i32, y as i32, 1, 1,
             )));

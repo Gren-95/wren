@@ -214,18 +214,18 @@ impl WrenSidebar {
             menu.append_section(None, &bm_section);
         }
 
-        // Build a fresh PopoverMenu on every right-click and have it
-        // unparent itself on close. A long-lived popover parented to
-        // the row leaks at window dispose because the row never
-        // unparents its child popover.
-        let row_clone = row.clone();
+        let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+        popover.set_has_arrow(false);
+        popover.set_parent(row);
+        // Detach the popover when the row is being torn down so it
+        // doesn't show up as a leftover child during finalize.
+        row.connect_unrealize(glib::clone!(
+            #[strong] popover,
+            move |_| popover.unparent()
+        ));
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(move |_, _, x, y| {
-            let popover = gtk4::PopoverMenu::from_model(Some(&menu));
-            popover.set_has_arrow(false);
-            popover.set_parent(&row_clone);
-            popover.connect_closed(|p| p.unparent());
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
                 x as i32, y as i32, 1, 1,
             )));
