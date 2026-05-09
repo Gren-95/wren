@@ -149,8 +149,41 @@ impl WrenSidebar {
             uris.truncate(n_static as usize);
         }
 
+        self.append_recents_section();
         self.append_bookmarks_section();
         self.append_volumes_section();
+    }
+
+    fn append_recents_section(&self) {
+        let imp = self.imp();
+        let list = &imp.list_box;
+
+        let Some(root) = self.root() else { return };
+        let Some(win) = root.downcast_ref::<crate::window::WrenWindow>() else { return };
+        let Some(app) = win
+            .application()
+            .and_downcast::<crate::application::WrenApplication>()
+        else {
+            return;
+        };
+        let recents = app.recent_uris();
+        if recents.is_empty() {
+            return;
+        }
+
+        list.append(&Self::build_header_row("Recent"));
+        imp.place_uris.borrow_mut().push(String::new());
+        for uri in &recents {
+            let display = gio::File::for_uri(uri)
+                .basename()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| uri.clone());
+            let row = Self::build_place_row(&display, "document-open-recent-symbolic");
+            Self::attach_sidebar_context_menu(&row, uri, false);
+            Self::attach_drop_target(&row, uri);
+            list.append(&row);
+            imp.place_uris.borrow_mut().push(uri.clone());
+        }
     }
 
     fn append_bookmarks_section(&self) {
@@ -261,6 +294,12 @@ impl WrenSidebar {
 
     /// Re-read bookmarks and volumes, rebuilding all dynamic sidebar rows.
     pub fn reload_bookmarks(&self) {
+        self.reload_volumes();
+    }
+
+    /// Rebuild the Recent section (in practice all dynamic rows, since
+    /// they share the same n_static_rows-based truncation).
+    pub fn reload_recents(&self) {
         self.reload_volumes();
     }
 

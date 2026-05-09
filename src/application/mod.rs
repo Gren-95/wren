@@ -3,6 +3,9 @@ mod imp;
 use adw::subclass::prelude::ObjectSubclassIsExt;
 use glib::Object;
 
+/// Maximum number of locations kept in the sidebar's Recent section.
+pub const RECENTS_MAX: usize = 10;
+
 glib::wrapper! {
     pub struct WrenApplication(ObjectSubclass<imp::WrenApplication>)
         @extends adw::Application, gtk4::Application, gio::Application,
@@ -102,5 +105,28 @@ impl WrenApplication {
         self.imp().debug_logging.set(v);
         crate::logging::set_enabled(v);
         self.imp().save_settings();
+    }
+
+    pub fn recent_uris(&self) -> Vec<String> {
+        self.imp().recent_uris.borrow().clone()
+    }
+
+    /// Push `uri` to the front of the recents list (MRU), deduplicating any
+    /// prior occurrence and capping at `RECENTS_MAX`. Returns true when the
+    /// list changed (caller may want to refresh the sidebar).
+    pub fn push_recent_uri(&self, uri: &str) -> bool {
+        if uri.is_empty() {
+            return false;
+        }
+        let mut list = self.imp().recent_uris.borrow_mut();
+        if list.first().map_or(false, |u| u == uri) {
+            return false;
+        }
+        list.retain(|u| u != uri);
+        list.insert(0, uri.to_string());
+        list.truncate(RECENTS_MAX);
+        drop(list);
+        self.imp().save_settings();
+        true
     }
 }
