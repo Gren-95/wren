@@ -99,7 +99,8 @@ impl ObjectImpl for WrenBreadcrumbBar {
 
         // Escape leaves edit mode (when the popup is open the
         // completion machinery eats Escape itself; this fires only
-        // when the popup is closed).
+        // when the popup is closed). Tab triggers path-component
+        // completion (see handle_tab_completion).
         let key_ctrl = gtk4::EventControllerKey::new();
         key_ctrl.connect_key_pressed(glib::clone!(
             #[weak] obj,
@@ -107,6 +108,9 @@ impl ObjectImpl for WrenBreadcrumbBar {
             move |_, key, _, _| {
                 if key == gtk4::gdk::Key::Escape {
                     obj.leave_edit_mode();
+                    glib::Propagation::Stop
+                } else if key == gtk4::gdk::Key::Tab {
+                    obj.imp().handle_tab_completion();
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
@@ -194,6 +198,71 @@ impl WrenBreadcrumbBar {
         attrs.insert(dim);
         cell.set_property("attributes", &attrs);
     }
+
+    /// Tab-key handler for the path entry. Completes the trailing
+    /// path component to the longest unambiguous directory name; on
+    /// multiple matches it also asks the completion popup to surface.
+    /// Tab is always swallowed (Propagation::Stop in the caller) — a
+    /// 0-match Tab must not move focus out of the entry.
+    pub fn handle_tab_completion(&self) {
+        let entry = &*self.path_entry;
+        let raw = entry.text().to_string();
+        let typed_path = super::typed_path_for_completion(&raw);
+        let partial = &raw[typed_path.len()..];
+
+        let matches: Vec<(String, bool)> = super::list_completions(&raw, 1000)
+            .into_iter()
+            .filter(|(_, is_dir)| *is_dir)
+            .collect();
+
+        if matches.is_empty() {
+            return;
+        }
+
+        if matches.len() == 1 {
+            let mut full = typed_path;
+            full.push_str(&matches[0].0);
+            full.push('/');
+            entry.set_text(&full);
+            entry.set_position(-1);
+            return;
+        }
+
+        let lcp = longest_common_prefix(matches.iter().map(|(n, _)| n.as_str()));
+        if lcp.chars().count() > partial.chars().count() {
+            let mut full = typed_path;
+            full.push_str(&lcp);
+            entry.set_text(&full);
+            entry.set_position(-1);
+        }
+
+        #[allow(deprecated)]
+        if let Some(completion) = entry.completion() {
+            completion.complete();
+        }
+    }
+}
+
+/// Longest common prefix of an iterator of strings, computed at char
+/// boundaries (so we never split a multi-byte UTF-8 codepoint). Empty
+/// input → empty string.
+fn longest_common_prefix<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String {
+    let mut iter = iter.into_iter();
+    let Some(first) = iter.next() else { return String::new() };
+    let mut prefix: String = first.to_string();
+    for s in iter {
+        let new_len = prefix
+            .chars()
+            .zip(s.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let byte_len: usize = prefix.chars().take(new_len).map(|c| c.len_utf8()).sum();
+        prefix.truncate(byte_len);
+        if prefix.is_empty() {
+            break;
+        }
+    }
+    prefix
 }
 
 impl WidgetImpl for WrenBreadcrumbBar {}
