@@ -24,6 +24,7 @@ pub struct WrenApplication {
     pub color_scheme: RefCell<String>,
     pub animations_enabled: Cell<bool>,
     pub debug_logging: Cell<bool>,
+    pub recent_uris: RefCell<Vec<String>>,
 }
 
 impl Default for WrenApplication {
@@ -46,6 +47,7 @@ impl Default for WrenApplication {
             color_scheme: RefCell::new("default".to_string()),
             animations_enabled: Cell::new(true),
             debug_logging: Cell::new(false),
+            recent_uris: RefCell::new(Vec::new()),
         }
     }
 }
@@ -128,6 +130,17 @@ impl WrenApplication {
                     *self.color_scheme.borrow_mut() = s;
                 }
             }
+            // Same \t-joined storage rationale as last_tabs above.
+            if let Ok(joined) = kf.string("Recents", "uris") {
+                let s = joined.to_string();
+                let mut uris: Vec<String> = if s.is_empty() {
+                    Vec::new()
+                } else {
+                    s.split('\t').map(|s| s.to_string()).collect()
+                };
+                uris.truncate(super::RECENTS_MAX);
+                *self.recent_uris.borrow_mut() = uris;
+            }
         }
     }
 
@@ -159,6 +172,7 @@ impl WrenApplication {
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         kf.set_boolean("General", "debug_logging", self.debug_logging.get());
+        kf.set_string("Recents", "uris", &self.recent_uris.borrow().join("\t"));
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

@@ -478,6 +478,7 @@ impl WrenWindow {
                         }
                         window.update_selection_actions();
                         window.start_dir_monitor(tab_idx, &location);
+                        window.track_recent_location(&location);
                     }
                     Err(e) => {
                         // Match the success-path guard: if this load was
@@ -2438,6 +2439,24 @@ impl WrenWindow {
                 win.imp().sidebar.reload_volumes();
             }
         ));
+    }
+
+    /// Push a successfully-navigated directory onto the Recents MRU list and
+    /// refresh the sidebar if it changed. Only `file://` locations are
+    /// tracked — virtual roots (`trash:///`, `recent:///`, search results,
+    /// remote mounts without a local path) wouldn't round-trip cleanly
+    /// through the URI list and aren't useful as quick-access entries.
+    pub fn track_recent_location(&self, location: &gio::File) {
+        if location.path().is_none() || location.uri_scheme().as_deref() != Some("file") {
+            return;
+        }
+        let uri = location.uri().to_string();
+        let Some(app) = self.application().and_downcast::<WrenApplication>() else {
+            return;
+        };
+        if app.push_recent_uri(&uri) {
+            self.imp().sidebar.reload_recents();
+        }
     }
 
     pub fn remove_bookmark(&self, uri: &str) {

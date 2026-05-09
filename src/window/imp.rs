@@ -729,6 +729,10 @@ impl ObjectImpl for WrenWindow {
         obj.setup_typeahead();
         obj.setup_search();
         obj.setup_volume_monitor();
+        // Now that the sidebar is rooted in the window we can render the
+        // Recent section pulled from settings; populate_places ran during
+        // template construction when `self.root()` was still None.
+        obj.imp().sidebar.reload_recents();
         obj.update_selection_actions();
         obj.update_undo_actions();
 
