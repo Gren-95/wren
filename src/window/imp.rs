@@ -726,7 +726,6 @@ impl ObjectImpl for WrenWindow {
         ));
         obj.add_controller(mouse_nav);
 
-        obj.setup_typeahead();
         obj.setup_search();
         obj.setup_volume_monitor();
         // Now that the sidebar is rooted in the window we can render the

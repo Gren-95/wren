@@ -8,6 +8,7 @@ use gtk4::gdk;
 use gtk4::prelude::*;
 
 use crate::file_view::cell::WrenFileCell;
+use crate::file_view::typeahead::TypeaheadState;
 use crate::model::FileObject;
 
 glib::wrapper! {
@@ -495,6 +496,7 @@ mod imp {
         pub bound_cells: BoundCells,
         pub context_menu_model: RefCell<Option<gio::MenuModel>>,
         pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
+        pub typeahead: Rc<TypeaheadState>,
     }
 
     impl Default for WrenFileGrid {
@@ -507,6 +509,7 @@ mod imp {
                 bound_cells: Rc::new(RefCell::new(HashMap::new())),
                 context_menu_model: RefCell::new(None),
                 context_popover: RefCell::new(None),
+                typeahead: Rc::new(TypeaheadState::default()),
             }
         }
     }
@@ -564,6 +567,15 @@ mod imp {
                 glib::Propagation::Proceed
             });
             self.grid_view.add_controller(scroll);
+
+            let gv = self.grid_view.clone();
+            crate::file_view::typeahead::attach(
+                &self.grid_view,
+                Rc::clone(&self.typeahead),
+                move |pos| {
+                    gv.scroll_to(pos, gtk4::ListScrollFlags::FOCUS, None);
+                },
+            );
 
             let scrolled = gtk4::ScrolledWindow::new();
             scrolled.set_child(Some(&self.grid_view));
