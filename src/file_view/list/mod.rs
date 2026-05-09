@@ -8,6 +8,7 @@ use gtk4::gdk;
 use gtk4::prelude::*;
 
 use crate::file_view::row::WrenFileRow;
+use crate::file_view::typeahead::TypeaheadState;
 use crate::model::FileObject;
 
 glib::wrapper! {
@@ -484,6 +485,7 @@ mod imp {
         pub header_icon_spacer: gtk4::Box,
         pub context_menu_model: RefCell<Option<gio::MenuModel>>,
         pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
+        pub typeahead: Rc<TypeaheadState>,
     }
 
     impl Default for WrenFileList {
@@ -498,6 +500,7 @@ mod imp {
                 header_icon_spacer: gtk4::Box::new(gtk4::Orientation::Horizontal, 0),
                 context_menu_model: RefCell::new(None),
                 context_popover: RefCell::new(None),
+                typeahead: Rc::new(TypeaheadState::default()),
             }
         }
     }
@@ -550,6 +553,15 @@ mod imp {
                 glib::Propagation::Proceed
             });
             self.list_view.add_controller(scroll);
+
+            let lv = self.list_view.clone();
+            crate::file_view::typeahead::attach(
+                &self.list_view,
+                Rc::clone(&self.typeahead),
+                move |pos| {
+                    lv.scroll_to(pos, gtk4::ListScrollFlags::FOCUS, None);
+                },
+            );
 
             // ── Column header row ─────────────────────────────────────────
             let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
