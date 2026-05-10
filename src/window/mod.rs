@@ -8,6 +8,9 @@ mod templates;
 mod trash;
 pub mod undo;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use glib::Object;
@@ -1869,15 +1872,24 @@ impl WrenWindow {
         // for "this folder" — useful for opening a project dir in an
         // editor, the current folder in a terminal, etc.
         let objs = self.selected_file_objects();
-        let (files, content_type) = if let Some(obj) = objs.first() {
+        let (files, content_type) = if !objs.is_empty() {
             // Folders use the synthetic "inode/directory" type; that's a
             // real mimetype with apps registered against it (file managers,
             // archive tools, editors that accept directories, …).
-            let ct = if obj.is_directory() {
-                "inode/directory".to_string()
-            } else {
-                obj.content_type()
+            let mime_for = |o: &FileObject| -> String {
+                if o.is_directory() {
+                    "inode/directory".to_string()
+                } else {
+                    o.content_type()
+                }
             };
+            let mimes: Vec<String> = objs.iter().map(mime_for).collect();
+            // Multi-select: pick the most-common MIME. If there's no clear
+            // winner (e.g. completely heterogeneous selection where every
+            // item differs) fall back to application/octet-stream so we can
+            // still show a useful picker (text editors, archivers, …).
+            let ct = most_common_mime(&mimes)
+                .unwrap_or_else(|| "application/octet-stream".to_string());
             let files: Vec<gio::File> = objs.iter().map(|o| o.file().clone()).collect();
             (files, ct)
         } else {
@@ -1894,11 +1906,25 @@ impl WrenWindow {
             return;
         }
 
-        let apps = gio::AppInfo::all_for_type(&content_type);
-        if apps.is_empty() {
-            self.show_toast("No applications available for this file type");
-            return;
-        }
+        // Two app pools: recommended (handlers for content_type) and "all"
+        // (every installed AppInfo, minus server-only / hidden ones).
+        // Recommended apps are removed from "all" so the lists don't
+        // duplicate entries.
+        let recommended = gio::AppInfo::all_for_type(&content_type);
+        let recommended_ids: std::collections::HashSet<String> = recommended
+            .iter()
+            .filter_map(|a| a.id().map(|s| s.to_string()))
+            .collect();
+        let mut all_apps: Vec<gio::AppInfo> = gio::AppInfo::all()
+            .into_iter()
+            .filter(|a| a.should_show())
+            .filter(|a| match a.id() {
+                Some(id) => !recommended_ids.contains(id.as_str()),
+                None => true,
+            })
+            .collect();
+        all_apps.sort_by_key(|a| a.display_name().to_lowercase());
+
         let default = gio::AppInfo::default_for_type(&content_type, false);
 
         // Build the picker manually — GtkAppChooserDialog has been
@@ -1915,44 +1941,130 @@ impl WrenWindow {
         };
         let dialog = adw::AlertDialog::new(Some("Open With"), Some(&body));
 
-        let list = gtk4::ListBox::new();
-        list.add_css_class("boxed-list");
-        list.set_selection_mode(gtk4::SelectionMode::Single);
+        // Tracks the currently selected AppInfo across the two listboxes.
+        // RefCell because the row-activated callbacks both read and write it.
+        let selected_app: Rc<RefCell<Option<gio::AppInfo>>> = Rc::new(RefCell::new(None));
+
+        let recommended_list = gtk4::ListBox::new();
+        recommended_list.add_css_class("boxed-list");
+        recommended_list.set_selection_mode(gtk4::SelectionMode::Single);
 
         let mut default_idx: Option<i32> = None;
-        for (i, app) in apps.iter().enumerate() {
+        if recommended.is_empty() {
             let row = adw::ActionRow::new();
-            row.set_title(app.display_name().as_str());
-            if let Some(desc) = app.description() {
-                row.set_subtitle(desc.as_str());
-            }
-            if let Some(icon) = app.icon() {
-                let img = gtk4::Image::from_gicon(&icon);
-                img.set_pixel_size(32);
-                row.add_prefix(&img);
-            }
-            row.set_activatable(true);
-            list.append(&row);
-            if let Some(d) = &default {
-                if app.id() == d.id() {
-                    default_idx = Some(i as i32);
+            row.set_title("No recommended applications");
+            row.set_subtitle(&format!(
+                "Nothing is registered for “{content_type}”"
+            ));
+            row.set_activatable(false);
+            row.set_sensitive(false);
+            recommended_list.append(&row);
+        } else {
+            for (i, app) in recommended.iter().enumerate() {
+                let row = make_app_row(app);
+                recommended_list.append(&row);
+                if let Some(d) = &default {
+                    if app.id() == d.id() {
+                        default_idx = Some(i as i32);
+                    }
                 }
             }
         }
-        if let Some(idx) = default_idx {
-            if let Some(row) = list.row_at_index(idx) {
-                list.select_row(Some(&row));
-            }
-        } else if let Some(row) = list.row_at_index(0) {
-            list.select_row(Some(&row));
+
+        let all_list = gtk4::ListBox::new();
+        all_list.add_css_class("boxed-list");
+        all_list.set_selection_mode(gtk4::SelectionMode::Single);
+        for app in &all_apps {
+            let row = make_app_row(app);
+            all_list.append(&row);
         }
 
-        let scroll = gtk4::ScrolledWindow::new();
-        scroll.set_min_content_height(280);
-        scroll.set_max_content_height(420);
-        scroll.set_propagate_natural_height(true);
-        scroll.set_child(Some(&list));
-        dialog.set_extra_child(Some(&scroll));
+        // Wire single-selection across both lists: picking a row in one
+        // list deselects any row in the other so we always have exactly
+        // one active selection.
+        recommended_list.connect_row_selected(glib::clone!(
+            #[weak] all_list,
+            #[strong] selected_app,
+            #[strong] recommended,
+            move |_, row| {
+                if let Some(r) = row {
+                    all_list.unselect_all();
+                    let i = r.index() as usize;
+                    *selected_app.borrow_mut() = recommended.get(i).cloned();
+                }
+            }
+        ));
+        all_list.connect_row_selected(glib::clone!(
+            #[weak] recommended_list,
+            #[strong] selected_app,
+            #[strong] all_apps,
+            move |_, row| {
+                if let Some(r) = row {
+                    recommended_list.unselect_all();
+                    let i = r.index() as usize;
+                    *selected_app.borrow_mut() = all_apps.get(i).cloned();
+                }
+            }
+        ));
+
+        // Pre-select the default handler (or first recommended app).
+        if !recommended.is_empty() {
+            let idx = default_idx.unwrap_or(0);
+            if let Some(row) = recommended_list.row_at_index(idx) {
+                recommended_list.select_row(Some(&row));
+            }
+        }
+
+        // ── Outer layout ────────────────────────────────────────────────
+        // Vertical box: recommended list, expander with all apps, "Set as
+        // default" checkbox, all wrapped in a ScrolledWindow so the
+        // expander contents can be very long without forcing the dialog
+        // to grow off-screen.
+        let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        vbox.append(&recommended_list);
+
+        // ExpanderRow needs a ListBox parent to render correctly. We
+        // wrap it in a single-row "boxed-list" ListBox; that's the
+        // idiomatic way to drop an expander in a non-PreferencesPage
+        // context.
+        let expander_box = gtk4::ListBox::new();
+        expander_box.add_css_class("boxed-list");
+        expander_box.set_selection_mode(gtk4::SelectionMode::None);
+        let expander = adw::ExpanderRow::new();
+        expander.set_title("Show all applications");
+        let all_scroll = gtk4::ScrolledWindow::new();
+        all_scroll.set_min_content_height(220);
+        all_scroll.set_max_content_height(360);
+        all_scroll.set_propagate_natural_height(true);
+        all_scroll.set_child(Some(&all_list));
+        expander.add_row(&all_scroll);
+        expander_box.append(&expander);
+        vbox.append(&expander_box);
+
+        // "Set as default" — only meaningful for native files with a real
+        // mimetype. Disable for trash:// / recent:// / fallback
+        // application/octet-stream where pinning a default would be
+        // surprising or useless.
+        let can_set_default = content_type != "application/octet-stream"
+            && files
+                .iter()
+                .all(|f| matches!(f.uri_scheme().as_deref(), Some("file")));
+        let set_default_check = gtk4::CheckButton::with_label("Set as default for this file type");
+        set_default_check.set_sensitive(can_set_default);
+        if !can_set_default {
+            set_default_check.set_tooltip_text(Some(
+                "Only available for local files with a known type",
+            ));
+        }
+        vbox.append(&set_default_check);
+
+        let outer_scroll = gtk4::ScrolledWindow::new();
+        outer_scroll.set_min_content_height(360);
+        outer_scroll.set_max_content_height(560);
+        outer_scroll.set_propagate_natural_height(true);
+        outer_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
+        outer_scroll.set_child(Some(&vbox));
+        dialog.set_extra_child(Some(&outer_scroll));
 
         dialog.add_response("cancel", "Cancel");
         dialog.add_response("open", "Open");
@@ -1960,18 +2072,23 @@ impl WrenWindow {
         dialog.set_default_response(Some("open"));
         dialog.set_close_response("cancel");
 
-        // The launcher takes a row index and runs the open. Shared by the
-        // "Open" button (via connect_response) and double-click / Enter on
-        // a row. AdwAlertDialog has no programmatic-response API, so the
-        // row-activation path closes the dialog itself.
+        // The launcher takes the chosen AppInfo and runs it. Shared by
+        // the "Open" button (via connect_response) and double-click /
+        // Enter on a row. AdwAlertDialog has no programmatic-response
+        // API, so the row-activation path closes the dialog itself.
         let launch = {
-            let apps = apps.clone();
             let files = files.clone();
+            let content_type = content_type.clone();
             glib::clone!(
                 #[weak(rename_to = window)] self,
+                #[weak] set_default_check,
                 #[upgrade_or] (),
-                move |idx: usize| {
-                    let Some(app) = apps.get(idx) else { return };
+                move |app: gio::AppInfo| {
+                    if set_default_check.is_sensitive() && set_default_check.is_active() {
+                        if let Err(e) = app.set_as_default_for_type(&content_type) {
+                            window.show_toast(&format!("Could not set default: {e}"));
+                        }
+                    }
                     // Terminal apps (Terminal=true in the .desktop file) need
                     // to be run inside a terminal emulator. glib's built-in
                     // launcher only knows a hardcoded list of terminals
@@ -1980,8 +2097,9 @@ impl WrenWindow {
                     // find terminal required for application". Detect this
                     // case and fall back to spawning through the terminal
                     // we already use for "Open in Terminal".
-                    if window.app_needs_terminal(app) {
-                        if window.launch_terminal_app(app, &files) {
+                    if window.app_needs_terminal(&app) {
+                        if window.launch_terminal_app(&app, &files) {
+                            window.show_toast(&format!("Opened in {}", app.display_name()));
                             return;
                         }
                         window.show_toast(&format!(
@@ -1992,31 +2110,50 @@ impl WrenWindow {
                     }
                     let uris: Vec<_> = files.iter().map(|f| f.uri()).collect();
                     let uri_strs: Vec<&str> = uris.iter().map(|u| u.as_str()).collect();
-                    if let Err(e) = app.launch_uris(&uri_strs, gio::AppLaunchContext::NONE) {
-                        window.show_toast(&format!("Cannot open: {e}"));
+                    match app.launch_uris(&uri_strs, gio::AppLaunchContext::NONE) {
+                        Ok(()) => window.show_toast(&format!("Opened in {}", app.display_name())),
+                        Err(e) => window.show_toast(&format!("Cannot open: {e}")),
                     }
                 }
             )
         };
 
-        list.connect_row_activated(glib::clone!(
+        // Double-click / Enter on a row launches immediately.
+        recommended_list.connect_row_activated(glib::clone!(
             #[weak] dialog,
             #[strong] launch,
+            #[strong] recommended,
             move |_, row| {
-                launch(row.index() as usize);
-                dialog.close();
+                if let Some(app) = recommended.get(row.index() as usize).cloned() {
+                    launch(app);
+                    dialog.close();
+                }
+            }
+        ));
+        all_list.connect_row_activated(glib::clone!(
+            #[weak] dialog,
+            #[strong] launch,
+            #[strong] all_apps,
+            move |_, row| {
+                if let Some(app) = all_apps.get(row.index() as usize).cloned() {
+                    launch(app);
+                    dialog.close();
+                }
             }
         ));
 
         dialog.connect_response(
             None,
             glib::clone!(
-                #[weak] list,
+                #[strong] selected_app,
                 #[strong] launch,
+                #[weak(rename_to = window)] self,
                 move |_, response| {
                     if response != "open" { return };
-                    let Some(row) = list.selected_row() else { return };
-                    launch(row.index() as usize);
+                    match selected_app.borrow().clone() {
+                        Some(app) => launch(app),
+                        None => window.show_toast("No application selected"),
+                    }
                 }
             ),
         );
@@ -4091,4 +4228,49 @@ fn shell_escape(s: &str) -> String {
     }
     out.push('\'');
     out
+}
+
+// Pick the most-frequent non-empty MIME type across a slice of mimes.
+// Returns None when the input is empty or all entries are empty strings.
+// Ties are broken by first appearance (HashMap iteration order is not
+// stable but max_by_key is biased toward the last equal element, so we
+// reverse the iterator to favor the earliest entry on ties — keeps the
+// chosen MIME deterministic for "all distinct" selections).
+fn most_common_mime(mimes: &[String]) -> Option<String> {
+    let mut counts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for m in mimes.iter().filter(|s| !s.is_empty()) {
+        *counts.entry(m.as_str()).or_insert(0) += 1;
+    }
+    if counts.is_empty() {
+        return None;
+    }
+    // Walk in input order so the first MIME wins on a tie.
+    let mut best: Option<(&str, usize)> = None;
+    for m in mimes.iter().filter(|s| !s.is_empty()) {
+        let c = counts[m.as_str()];
+        match best {
+            None => best = Some((m.as_str(), c)),
+            Some((_, bc)) if c > bc => best = Some((m.as_str(), c)),
+            _ => {}
+        }
+    }
+    best.map(|(s, _)| s.to_string())
+}
+
+// Build an AdwActionRow representing a launchable AppInfo. Used in both
+// the "Recommended" and "All applications" lists in the Open With dialog.
+fn make_app_row(app: &gio::AppInfo) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_title(app.display_name().as_str());
+    if let Some(desc) = app.description() {
+        row.set_subtitle(desc.as_str());
+    }
+    if let Some(icon) = app.icon() {
+        let img = gtk4::Image::from_gicon(&icon);
+        img.set_pixel_size(32);
+        row.add_prefix(&img);
+    }
+    row.set_activatable(true);
+    row
 }
