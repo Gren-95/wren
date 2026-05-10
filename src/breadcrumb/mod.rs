@@ -390,3 +390,70 @@ fn expand_tilde(s: &str) -> String {
         s.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{has_uri_scheme, typed_path_for_completion};
+
+    #[test]
+    fn uri_scheme_smb() {
+        assert!(has_uri_scheme("smb://server/share"));
+    }
+
+    #[test]
+    fn uri_scheme_file() {
+        assert!(has_uri_scheme("file:///etc/hosts"));
+    }
+
+    #[test]
+    fn uri_scheme_sftp() {
+        assert!(has_uri_scheme("sftp://host/path"));
+    }
+
+    #[test]
+    fn uri_scheme_http() {
+        assert!(has_uri_scheme("http://example.com"));
+    }
+
+    #[test]
+    fn no_scheme_for_absolute_path() {
+        assert!(!has_uri_scheme("/foo"));
+    }
+
+    #[test]
+    fn no_scheme_for_tilde() {
+        assert!(!has_uri_scheme("~/foo"));
+    }
+
+    #[test]
+    fn no_scheme_for_empty_string() {
+        assert!(!has_uri_scheme(""));
+    }
+
+    #[test]
+    fn no_scheme_for_single_char_prefix() {
+        // The function requires the colon to be at index >= 2, so single-letter
+        // prefixes like Windows drive letters or one-char identifiers don't count.
+        assert!(!has_uri_scheme("a:b"));
+    }
+
+    #[test]
+    fn no_scheme_for_relative_path_with_colon_in_filename() {
+        // Disambiguating relative paths that happen to contain a colon
+        // is still impossible from the prefix alone, but at least dirs
+        // starting with non-alphanum chars before the colon are rejected.
+        assert!(!has_uri_scheme("./foo:bar"));
+    }
+
+    #[test]
+    fn typed_path_with_trailing_slash() {
+        // typed path is everything up to and including the last '/'.
+        assert_eq!(typed_path_for_completion("/usr/loc"), "/usr/");
+        assert_eq!(typed_path_for_completion("/usr/"), "/usr/");
+    }
+
+    #[test]
+    fn typed_path_no_slash() {
+        assert_eq!(typed_path_for_completion("loc"), "");
+    }
+}

@@ -268,3 +268,117 @@ impl WrenFileCell {
         imp.icon.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::FileObject;
+    use crate::test_helpers::run_on_gtk_thread;
+
+    fn make_file_object(name: &str, kind: gio::FileType) -> FileObject {
+        let info = gio::FileInfo::new();
+        info.set_name(std::path::Path::new(name));
+        info.set_display_name(name);
+        info.set_file_type(kind);
+        info.set_size(0);
+        info.set_attribute_uint64("standard::size", 0);
+        info.set_content_type("text/plain");
+        info.set_icon(&gio::ThemedIcon::new("text-x-generic"));
+        info.set_is_hidden(name.starts_with('.'));
+        info.set_is_symlink(false);
+        let file = gio::File::for_path(format!("/tmp/wren-test/{name}"));
+        FileObject::new(file, info)
+    }
+
+    #[test]
+    fn cell_bind_sets_label_with_extension_when_show_extension_true() {
+        run_on_gtk_thread(|| {
+            let cell = WrenFileCell::new();
+            let fo = make_file_object("foo.txt", gio::FileType::Regular);
+            cell.bind(&fo, 64, true);
+            let label = cell.imp().name.label();
+            assert_eq!(label.as_str(), "foo.txt");
+            assert!(cell.bound_file_object().is_some());
+        });
+    }
+
+    #[test]
+    fn cell_bind_strips_extension_when_show_extension_false() {
+        run_on_gtk_thread(|| {
+            let cell = WrenFileCell::new();
+            let fo = make_file_object("foo.txt", gio::FileType::Regular);
+            cell.bind(&fo, 64, false);
+            let label = cell.imp().name.label();
+            assert_eq!(label.as_str(), "foo");
+        });
+    }
+
+    #[test]
+    fn cell_bind_dotfile_kept_intact_regardless_of_show_extension() {
+        run_on_gtk_thread(|| {
+            let cell = WrenFileCell::new();
+            let fo = make_file_object(".bashrc", gio::FileType::Regular);
+            cell.bind(&fo, 64, false);
+            assert_eq!(cell.imp().name.label().as_str(), ".bashrc");
+        });
+    }
+
+    #[test]
+    fn cell_unbind_clears_state() {
+        run_on_gtk_thread(|| {
+            let cell = WrenFileCell::new();
+            let fo = make_file_object("any.txt", gio::FileType::Regular);
+            cell.bind(&fo, 48, true);
+            assert!(cell.bound_file_object().is_some());
+            cell.unbind();
+            assert!(cell.bound_file_object().is_none());
+            assert_eq!(cell.imp().name.label().as_str(), "");
+        });
+    }
+
+    #[test]
+    fn strip_extension_drops_simple_ext() {
+        assert_eq!(strip_extension("README.md"), "README");
+    }
+
+    #[test]
+    fn strip_extension_keeps_only_last_segment() {
+        // "tar.gz" should drop only the last extension, leaving "archive.tar".
+        assert_eq!(strip_extension("archive.tar.gz"), "archive.tar");
+    }
+
+    #[test]
+    fn strip_extension_no_extension() {
+        assert_eq!(strip_extension("Makefile"), "Makefile");
+    }
+
+    #[test]
+    fn strip_extension_dotfile_kept_intact() {
+        // Dotfiles must keep their leading dot — they have no "extension".
+        assert_eq!(strip_extension(".bashrc"), ".bashrc");
+    }
+
+    #[test]
+    fn strip_extension_apple_double_kept_intact() {
+        // ._foo is an AppleDouble metadata file: leading dot, no real extension.
+        assert_eq!(strip_extension("._foo"), "._foo");
+    }
+
+    #[test]
+    fn strip_extension_dotfile_with_real_extension() {
+        // A leading-dot file with another dot: per impl, dotfiles are returned
+        // as-is regardless. This protects e.g. .config.json from losing context.
+        assert_eq!(strip_extension(".config.json"), ".config.json");
+    }
+
+    #[test]
+    fn strip_extension_empty_string() {
+        assert_eq!(strip_extension(""), "");
+    }
+
+    #[test]
+    fn strip_extension_trailing_dot() {
+        // "foo." has pos > 0; the empty trailing tail is stripped.
+        assert_eq!(strip_extension("foo."), "foo");
+    }
+}

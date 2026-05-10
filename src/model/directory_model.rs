@@ -466,3 +466,264 @@ impl DirectoryModel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::run_on_gtk_thread;
+
+    fn make_file_info(
+        name: &str,
+        kind: gio::FileType,
+        size: i64,
+        content_type: &str,
+        modified_unix: i64,
+    ) -> gio::FileInfo {
+        let info = gio::FileInfo::new();
+        info.set_name(std::path::Path::new(name));
+        info.set_display_name(name);
+        info.set_file_type(kind);
+        info.set_size(size);
+        // GFileInfo emits criticals on getter calls if these standard
+        // attributes are unset; populate explicitly so test output stays clean.
+        info.set_attribute_uint64("standard::size", size as u64);
+        info.set_content_type(content_type);
+        info.set_icon(&gio::ThemedIcon::new("text-x-generic"));
+        info.set_is_hidden(name.starts_with('.'));
+        info.set_is_symlink(false);
+        if modified_unix > 0 {
+            if let Ok(dt) = glib::DateTime::from_unix_local(modified_unix) {
+                info.set_modification_date_time(&dt);
+            }
+        }
+        info
+    }
+
+    fn make_file_object(
+        name: &str,
+        kind: gio::FileType,
+        size: i64,
+        content_type: &str,
+        modified_unix: i64,
+    ) -> FileObject {
+        let info = make_file_info(name, kind, size, content_type, modified_unix);
+        let file = gio::File::for_path(format!("/tmp/wren-test/{name}"));
+        FileObject::new(file, info)
+    }
+
+    fn names_in_selection(model: &DirectoryModel) -> Vec<String> {
+        use gtk4::prelude::*;
+        let sel = &model.selection;
+        let mut out = Vec::new();
+        for i in 0..sel.n_items() {
+            let item = sel.item(i).unwrap();
+            let fo = item.downcast::<FileObject>().unwrap();
+            out.push(fo.name());
+        }
+        out
+    }
+
+    #[test]
+    fn sort_key_round_trip_all_variants() {
+        for key in [SortKey::Name, SortKey::Size, SortKey::Date, SortKey::Type] {
+            assert_eq!(SortKey::from_str(key.as_str()), key);
+        }
+    }
+
+    #[test]
+    fn sort_key_unknown_string_defaults_to_name() {
+        assert_eq!(SortKey::from_str(""), SortKey::Name);
+        assert_eq!(SortKey::from_str("nope"), SortKey::Name);
+        assert_eq!(SortKey::from_str("NAME"), SortKey::Name); // case sensitive
+    }
+
+    #[test]
+    fn sort_key_default_is_name() {
+        assert_eq!(SortKey::default(), SortKey::Name);
+    }
+
+    #[test]
+    fn sort_key_as_str_returns_lowercase_token() {
+        assert_eq!(SortKey::Name.as_str(), "name");
+        assert_eq!(SortKey::Size.as_str(), "size");
+        assert_eq!(SortKey::Date.as_str(), "date");
+        assert_eq!(SortKey::Type.as_str(), "type");
+    }
+
+    #[test]
+    fn pipeline_selection_reflects_store_after_splice() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("alpha.txt", gio::FileType::Regular, 10, "text/plain", 1),
+                make_file_object("beta.txt", gio::FileType::Regular, 20, "text/plain", 2),
+                make_file_object("gamma.txt", gio::FileType::Regular, 30, "text/plain", 3),
+            ];
+            model.store.splice(0, 0, &items);
+            // Default filter hides nothing (no hidden entries) and search="".
+            // Default sort = Name ascending.
+            assert_eq!(model.selection.n_items(), 3);
+        });
+    }
+
+    #[test]
+    fn filter_hides_hidden_files_by_default() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("visible.txt", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object(".hidden", gio::FileType::Regular, 1, "text/plain", 1),
+            ];
+            model.store.splice(0, 0, &items);
+            // show_hidden = false (default); .hidden filtered out.
+            assert_eq!(model.selection.n_items(), 1);
+            assert_eq!(names_in_selection(&model), vec!["visible.txt".to_string()]);
+        });
+    }
+
+    #[test]
+    fn filter_show_hidden_includes_dotfiles() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("visible.txt", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object(".hidden", gio::FileType::Regular, 1, "text/plain", 1),
+            ];
+            model.store.splice(0, 0, &items);
+            model.set_filter("", true);
+            assert_eq!(model.selection.n_items(), 2);
+        });
+    }
+
+    #[test]
+    fn filter_search_text_matches_substring_case_insensitive() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("Photo.png", gio::FileType::Regular, 1, "image/png", 1),
+                make_file_object("notes.txt", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object(
+                    "backup.tar",
+                    gio::FileType::Regular,
+                    1,
+                    "application/x-tar",
+                    1,
+                ),
+            ];
+            model.store.splice(0, 0, &items);
+            model.set_filter("PHOTO", false);
+            assert_eq!(names_in_selection(&model), vec!["Photo.png".to_string()]);
+        });
+    }
+
+    #[test]
+    fn directories_sort_before_files() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            // Even with a name-asc sort, "zfolder" precedes "afile".
+            let items = vec![
+                make_file_object("afile", gio::FileType::Regular, 0, "text/plain", 1),
+                make_file_object(
+                    "zfolder",
+                    gio::FileType::Directory,
+                    0,
+                    "inode/directory",
+                    1,
+                ),
+            ];
+            model.store.splice(0, 0, &items);
+            assert_eq!(
+                names_in_selection(&model),
+                vec!["zfolder".to_string(), "afile".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn sort_by_size_ascending_orders_smallest_first() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("big", gio::FileType::Regular, 1000, "text/plain", 1),
+                make_file_object("tiny", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object("med", gio::FileType::Regular, 100, "text/plain", 1),
+            ];
+            model.store.splice(0, 0, &items);
+            model.set_sort(SortKey::Size, false);
+            assert_eq!(
+                names_in_selection(&model),
+                vec!["tiny".to_string(), "med".to_string(), "big".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn sort_by_size_reversed_orders_largest_first() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("med", gio::FileType::Regular, 100, "text/plain", 1),
+                make_file_object("big", gio::FileType::Regular, 1000, "text/plain", 1),
+                make_file_object("tiny", gio::FileType::Regular, 1, "text/plain", 1),
+            ];
+            model.store.splice(0, 0, &items);
+            model.set_sort(SortKey::Size, true);
+            assert_eq!(
+                names_in_selection(&model),
+                vec!["big".to_string(), "med".to_string(), "tiny".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn sort_by_name_reversed_z_to_a() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("apple", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object("zebra", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object("mango", gio::FileType::Regular, 1, "text/plain", 1),
+            ];
+            model.store.splice(0, 0, &items);
+            model.set_sort(SortKey::Name, true);
+            assert_eq!(
+                names_in_selection(&model),
+                vec![
+                    "zebra".to_string(),
+                    "mango".to_string(),
+                    "apple".to_string()
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn sort_by_date_orders_oldest_first_when_not_reversed() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("recent", gio::FileType::Regular, 1, "text/plain", 3000),
+                make_file_object("old", gio::FileType::Regular, 1, "text/plain", 1000),
+                make_file_object("mid", gio::FileType::Regular, 1, "text/plain", 2000),
+            ];
+            model.store.splice(0, 0, &items);
+            model.set_sort(SortKey::Date, false);
+            assert_eq!(
+                names_in_selection(&model),
+                vec!["old".to_string(), "mid".to_string(), "recent".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn sort_state_round_trips_through_set_sort() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            assert_eq!(model.sort_key(), SortKey::Name);
+            assert!(!model.sort_reversed());
+            model.set_sort(SortKey::Date, true);
+            assert_eq!(model.sort_key(), SortKey::Date);
+            assert!(model.sort_reversed());
+        });
+    }
+}

@@ -357,6 +357,11 @@ impl WrenApplication {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn reload_for_test(&self) {
+        self.load_settings();
+    }
+
     pub fn save_settings(&self) {
         let path = Self::settings_path();
         if let Some(parent) = path.parent() {

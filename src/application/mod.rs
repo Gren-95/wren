@@ -463,3 +463,247 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::OnceLock;
+
+    // GLib caches user_config_dir() on first call, so XDG_CONFIG_HOME
+    // must be set BEFORE any glib calls and can never be changed for
+    // the lifetime of the process. We point it at a single OnceLock
+    // tempdir and clean settings.ini between tests to isolate state.
+    static GTK_INIT: OnceLock<()> = OnceLock::new();
+    static CONFIG_HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+
+    fn ensure_test_config() -> &'static std::path::Path {
+        let dir = CONFIG_HOME.get_or_init(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            // SAFETY: set before any other thread or glib reads it.
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+            dir
+        });
+        dir.path()
+    }
+
+    fn ensure_gtk() {
+        // Touch the config-home env var first so glib's first read
+        // captures our tempdir.
+        let _ = ensure_test_config();
+        GTK_INIT.get_or_init(|| {
+            unsafe { gtk4::ffi::gtk_init() };
+        });
+    }
+
+    fn settings_ini_path() -> std::path::PathBuf {
+        let mut p = ensure_test_config().to_path_buf();
+        p.push("wren");
+        p.push("settings.ini");
+        p
+    }
+
+    fn fresh_app(suffix: &str) -> WrenApplication {
+        // Wipe settings.ini so the new WrenApplication starts from defaults.
+        let p = settings_ini_path();
+        let _ = std::fs::remove_file(&p);
+        WrenApplication::new(&format!("io.github.wren.test.{suffix}"))
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_recent_empty_string_no_op() {
+        ensure_gtk();
+        let app = fresh_app("empty");
+        assert!(!app.push_recent_uri(""));
+        assert!(app.recent_uris().is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_recent_first_insert() {
+        ensure_gtk();
+        let app = fresh_app("first");
+        assert!(app.push_recent_uri("file:///tmp/a"));
+        assert_eq!(app.recent_uris(), vec!["file:///tmp/a"]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_recent_duplicate_at_head_returns_false() {
+        ensure_gtk();
+        let app = fresh_app("dup_head");
+        assert!(app.push_recent_uri("file:///x"));
+        // Pushing the same uri that's already at index 0 is a no-op.
+        assert!(!app.push_recent_uri("file:///x"));
+        assert_eq!(app.recent_uris(), vec!["file:///x"]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_recent_duplicate_elsewhere_moves_to_head() {
+        ensure_gtk();
+        let app = fresh_app("dup_mid");
+        app.push_recent_uri("file:///a");
+        app.push_recent_uri("file:///b");
+        app.push_recent_uri("file:///c");
+        // Re-pushing 'a' should move it back to head, dedup'ing the prior copy.
+        assert!(app.push_recent_uri("file:///a"));
+        assert_eq!(
+            app.recent_uris(),
+            vec![
+                "file:///a".to_string(),
+                "file:///c".to_string(),
+                "file:///b".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_recent_caps_at_recents_max() {
+        ensure_gtk();
+        let app = fresh_app("cap");
+        // Push RECENTS_MAX + 1 distinct uris.
+        for i in 0..=RECENTS_MAX {
+            assert!(app.push_recent_uri(&format!("file:///dir-{i}")));
+        }
+        let list = app.recent_uris();
+        assert_eq!(list.len(), RECENTS_MAX);
+        // Most recently pushed is at the head.
+        assert_eq!(list[0], format!("file:///dir-{}", RECENTS_MAX));
+        // Oldest entry (file:///dir-0) was dropped off the tail.
+        assert!(!list.contains(&"file:///dir-0".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn settings_round_trip() {
+        ensure_gtk();
+        let app = fresh_app("rt");
+        app.set_terminal_cmd("alacritty");
+        app.set_show_hidden(true);
+        app.set_show_extensions(false);
+        app.set_zoom_level(5);
+        app.set_view_mode_pref("list");
+        app.set_sort_key_pref("size");
+        app.set_sort_reversed_pref(true);
+        app.set_window_size(1234, 567);
+        app.set_window_maximized(true);
+        app.set_sidebar_visible(false);
+        app.set_last_directory("file:///home/foo");
+        app.set_color_scheme_pref("dark");
+        app.set_last_tabs(
+            vec!["file:///a".to_string(), "file:///b".to_string()],
+            1,
+        );
+        app.push_recent_uri("file:///recent-a");
+        app.push_recent_uri("file:///recent-b");
+
+        // Construct a second app instance and have it re-read settings.ini.
+        let app2 = WrenApplication::new("io.github.wren.test.rt2");
+        adw::subclass::prelude::ObjectSubclassIsExt::imp(&app2).reload_for_test();
+
+        assert_eq!(app2.terminal_cmd(), "alacritty");
+        assert!(app2.show_hidden());
+        assert!(!app2.show_extensions());
+        assert_eq!(app2.zoom_level(), 5);
+        assert_eq!(app2.view_mode(), "list");
+        assert_eq!(app2.sort_key(), "size");
+        assert!(app2.sort_reversed());
+        assert_eq!(app2.window_size(), (1234, 567));
+        assert!(app2.window_maximized());
+        assert!(!app2.sidebar_visible());
+        assert_eq!(app2.last_directory(), "file:///home/foo");
+        assert_eq!(app2.color_scheme(), "dark");
+        assert_eq!(
+            app2.last_tabs(),
+            vec!["file:///a".to_string(), "file:///b".to_string()]
+        );
+        assert_eq!(app2.last_tab_index(), 1);
+        assert_eq!(
+            app2.recent_uris(),
+            vec!["file:///recent-b".to_string(), "file:///recent-a".to_string()]
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn settings_zoom_clamped_on_load() {
+        // Out-of-range zoom values in settings.ini are clamped back
+        // into [1, 5] when load_settings reads them.
+        ensure_gtk();
+        let app = fresh_app("clamp");
+        app.set_zoom_level(5); // arbitrary valid value to populate file
+        let p = settings_ini_path();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        let raw = raw.replace("zoom_level=5", "zoom_level=12");
+        std::fs::write(&p, raw).unwrap();
+
+        let app2 = WrenApplication::new("io.github.wren.test.clamp2");
+        adw::subclass::prelude::ObjectSubclassIsExt::imp(&app2).reload_for_test();
+        assert_eq!(app2.zoom_level(), 5); // clamped from 12 → 5
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn settings_invalid_view_mode_keeps_default() {
+        // Unknown view_mode strings are rejected in load_settings —
+        // only "grid" and "list" are accepted; defaults to "grid".
+        ensure_gtk();
+        let app = fresh_app("badview");
+        app.set_view_mode_pref("nonsense");
+        // The setter accepts any string; on reload, the validator drops it
+        // back to the in-memory default ("grid").
+        let app2 = WrenApplication::new("io.github.wren.test.badview2");
+        adw::subclass::prelude::ObjectSubclassIsExt::imp(&app2).reload_for_test();
+        assert_eq!(app2.view_mode(), "grid");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn settings_invalid_color_scheme_keeps_default() {
+        // Same defensive parse for color_scheme: only default/light/dark allowed.
+        ensure_gtk();
+        let app = fresh_app("badscheme");
+        app.set_color_scheme_pref("midnight");
+        let app2 = WrenApplication::new("io.github.wren.test.badscheme2");
+        adw::subclass::prelude::ObjectSubclassIsExt::imp(&app2).reload_for_test();
+        assert_eq!(app2.color_scheme(), "default");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn settings_recent_uris_truncated_on_load() {
+        // A settings.ini with > RECENTS_MAX entries is truncated by load_settings.
+        ensure_gtk();
+        let app = fresh_app("trunc");
+        app.set_zoom_level(3); // ensure save_settings runs and creates the file
+        let p = settings_ini_path();
+
+        // Build a tab-joined list of 20 entries — twice the cap.
+        let many: Vec<String> = (0..20).map(|i| format!("file:///many-{i}")).collect();
+        let joined = many.join("\t");
+        let raw = std::fs::read_to_string(&p).unwrap();
+        let mut new_lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+        // Replace the [Recents] section's uris= line, or append it.
+        let mut found = false;
+        for line in new_lines.iter_mut() {
+            if line.starts_with("uris=") {
+                *line = format!("uris={joined}");
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            new_lines.push("[Recents]".to_string());
+            new_lines.push(format!("uris={joined}"));
+        }
+        std::fs::write(&p, new_lines.join("\n") + "\n").unwrap();
+
+        let app2 = WrenApplication::new("io.github.wren.test.trunc2");
+        adw::subclass::prelude::ObjectSubclassIsExt::imp(&app2).reload_for_test();
+        assert_eq!(app2.recent_uris().len(), RECENTS_MAX);
+        // The first RECENTS_MAX entries are the ones kept (load truncates the tail).
+        assert_eq!(app2.recent_uris()[0], "file:///many-0");
+    }
+}
