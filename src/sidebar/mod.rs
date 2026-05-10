@@ -845,11 +845,10 @@ impl WrenSidebar {
         let row = gtk4::ListBoxRow::new();
         row.set_activatable(false);
         row.set_selectable(false);
+        row.add_css_class("wren-section-header");
 
         let lbl = gtk4::Label::new(Some(title));
         lbl.set_xalign(0.0);
-        lbl.set_margin_top(10);
-        lbl.set_margin_bottom(2);
         lbl.set_margin_start(8);
         lbl.set_margin_end(8);
         lbl.add_css_class("heading");

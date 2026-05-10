@@ -251,11 +251,27 @@ button.wren-sidebar-toggle:hover {
    location. SelectionMode::None on the list box rules out the standard
    :selected pseudo, so this is the only cue. */
 row.wren-active-place {
-  background-color: alpha(@accent_bg_color, 0.18);
+  background-color: alpha(@accent_bg_color, 0.35);
   color: @accent_color;
+  font-weight: bold;
 }
 row.wren-active-place:hover {
-  background-color: alpha(@accent_bg_color, 0.26);
+  background-color: alpha(@accent_bg_color, 0.45);
+}
+row.wren-active-place image {
+  color: @accent_color;
+}
+
+/* Divider line above each section header (Recent / Bookmarks / Devices)
+   so the eye picks up section boundaries without relying on the bold
+   uppercase header alone. */
+row.wren-section-header {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid alpha(@borders, 0.6);
+}
+row.wren-section-header > label {
+  margin-top: 0;
 }
 
 button.wren-volume-eject {
