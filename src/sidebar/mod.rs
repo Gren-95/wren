@@ -165,6 +165,7 @@ impl WrenSidebar {
 
         self.append_recents_section();
         self.append_bookmarks_section();
+        self.append_network_section();
         self.append_volumes_section();
 
         // Rebuilds wipe the GtkListBox selection (the new rows have no
@@ -246,6 +247,54 @@ impl WrenSidebar {
         }
     }
 
+    fn append_network_section(&self) {
+        let imp = self.imp();
+        let list = &imp.list_box;
+        let monitor = gio::VolumeMonitor::get();
+
+        // Only mounts whose root URI scheme is something other than
+        // "file" — i.e. real remote shares (sftp, smb, dav, ftp, …).
+        let remote_mounts: Vec<gio::Mount> = monitor
+            .mounts()
+            .into_iter()
+            .filter(|m| {
+                m.root()
+                    .uri_scheme()
+                    .map(|s| s.as_str() != "file")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        list.append(&Self::build_header_row("Network"));
+        imp.place_uris.borrow_mut().push(String::new());
+
+        // Static "Browse Network" entry — opens the GVFS network root
+        // which advertises any avahi/SMB shares the system has discovered.
+        let network_uri = "network:///";
+        let row = Self::build_place_row("Browse Network", "network-workgroup-symbolic");
+        Self::attach_sidebar_context_menu(&row, network_uri, false);
+        list.append(&row);
+        imp.place_uris.borrow_mut().push(network_uri.to_string());
+
+        for mount in &remote_mounts {
+            let name = mount.name().to_string();
+            let icon_name = mount
+                .icon()
+                .downcast::<gio::ThemedIcon>()
+                .ok()
+                .and_then(|ti| ti.names().into_iter().next())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "folder-remote-symbolic".to_string());
+            let uri = mount.root().uri().to_string();
+            let row = Self::build_volume_row(&name, &icon_name, false);
+            Self::attach_volume_eject_button(&row, mount);
+            Self::attach_volume_context_menu(&row, Some(mount.clone()), None);
+            Self::attach_drop_target(&row, &uri);
+            list.append(&row);
+            imp.place_uris.borrow_mut().push(uri);
+        }
+    }
+
     fn attach_sidebar_context_menu(row: &gtk4::ListBoxRow, uri: &str, is_bookmark: bool) {
         let menu = gio::Menu::new();
 
@@ -303,7 +352,18 @@ impl WrenSidebar {
         let imp = self.imp();
         let list = &imp.list_box;
         let monitor = gio::VolumeMonitor::get();
-        let raw_mounts: Vec<gio::Mount> = monitor.mounts();
+        // Only local mounts belong under Devices; remote mounts (sftp,
+        // smb, dav, …) are rendered under the Network section instead.
+        let raw_mounts: Vec<gio::Mount> = monitor
+            .mounts()
+            .into_iter()
+            .filter(|m| {
+                m.root()
+                    .uri_scheme()
+                    .map(|s| s.as_str() == "file")
+                    .unwrap_or(false)
+            })
+            .collect();
         let volumes: Vec<gio::Volume> = monitor.volumes();
 
         // Dedupe within the mounts list itself — GOA registers each
