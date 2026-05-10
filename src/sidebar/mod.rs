@@ -291,10 +291,66 @@ impl WrenSidebar {
         let mounts: Vec<gio::Mount> = monitor.mounts();
         let volumes: Vec<gio::Volume> = monitor.volumes();
 
-        // Volumes that are present but have no mount yet — mountable by click.
+        // Build a fingerprint of every already-mounted thing so unmounted
+        // volumes that point at the same backing account/device can be
+        // suppressed. GOA-backed cloud accounts (Google Drive, Nextcloud,
+        // …) often surface as BOTH a gio::Mount (auto-mounted at startup)
+        // AND a separate gio::Volume for the same account that reports
+        // get_mount() == None — the naive filter then renders both.
+        //
+        // We dedupe by:
+        //   (a) the volume that owns each mount, if any (mount.volume())
+        //   (b) each mount's root URI, matched against
+        //       volume.activation_root().uri() — covers cases where mount
+        //       and volume aren't linked through gio::Volume directly
+        //   (c) each mount's drive, matched against volume.drive()
+        let mounted_volumes: std::collections::HashSet<String> = mounts
+            .iter()
+            .filter_map(|m| m.volume().map(|v| v.identifier(gio::VOLUME_IDENTIFIER_KIND_UUID)
+                .or_else(|| v.identifier(gio::VOLUME_IDENTIFIER_KIND_LABEL))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.name().to_string())))
+            .collect();
+        let mounted_roots: std::collections::HashSet<String> = mounts
+            .iter()
+            .map(|m| m.root().uri().to_string())
+            .collect();
+        let mounted_drives: std::collections::HashSet<*mut gio::ffi::GDrive> = mounts
+            .iter()
+            .filter_map(|m| m.drive())
+            .map(|d| {
+                use glib::translate::ToGlibPtr;
+                let p: *mut gio::ffi::GDrive = d.to_glib_none().0;
+                p
+            })
+            .collect();
+
         let unmounted: Vec<gio::Volume> = volumes
             .into_iter()
             .filter(|v| v.get_mount().is_none())
+            .filter(|v| {
+                let id = v
+                    .identifier(gio::VOLUME_IDENTIFIER_KIND_UUID)
+                    .or_else(|| v.identifier(gio::VOLUME_IDENTIFIER_KIND_LABEL))
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| v.name().to_string());
+                if mounted_volumes.contains(&id) {
+                    return false;
+                }
+                if let Some(root) = v.activation_root() {
+                    if mounted_roots.contains(root.uri().as_str()) {
+                        return false;
+                    }
+                }
+                if let Some(d) = v.drive() {
+                    use glib::translate::ToGlibPtr;
+                    let p: *mut gio::ffi::GDrive = d.to_glib_none().0;
+                    if mounted_drives.contains(&p) {
+                        return false;
+                    }
+                }
+                true
+            })
             .collect();
 
         if mounts.is_empty() && unmounted.is_empty() {
