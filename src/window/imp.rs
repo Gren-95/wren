@@ -173,6 +173,16 @@ impl ObjectSubclass for WrenWindow {
             crate::wren_log!("action: {action_name}");
             win.new_folder();
         });
+        klass.install_action(
+            "win.new-from-template",
+            Some(glib::VariantTy::STRING),
+            |win, action_name, param| {
+                if let Some(name) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: {action_name}({name})");
+                    win.new_from_template(name);
+                }
+            },
+        );
         klass.install_action("win.rename", None, |win, action_name, _| {
             crate::wren_log!("action: {action_name}");
             win.rename_selection();

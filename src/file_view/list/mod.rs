@@ -305,11 +305,11 @@ impl WrenFileList {
         imp.list_view.add_controller(drop);
     }
 
-    pub fn setup_context_menu(&self, menu: &gio::MenuModel) {
+    pub fn setup_context_menu<F: Fn() -> gio::MenuModel + 'static>(&self, builder: F) {
         let imp = imp::WrenFileList::from_obj(self);
         // See WrenFileGrid::setup_context_menu for rationale on the
         // rebuild-on-each-click pattern.
-        imp.context_menu_model.replace(Some(menu.clone()));
+        imp.context_menu_builder.replace(Some(Box::new(builder)));
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(glib::clone!(
@@ -321,7 +321,10 @@ impl WrenFileList {
 
     fn popup_context_menu(&self, x: f64, y: f64) {
         let imp = imp::WrenFileList::from_obj(self);
-        let Some(model) = imp.context_menu_model.borrow().clone() else { return };
+        let model = match imp.context_menu_builder.borrow().as_ref() {
+            Some(b) => b(),
+            None => return,
+        };
         if let Some(old) = imp.context_popover.take() {
             old.unparent();
         }
@@ -474,7 +477,6 @@ impl WrenFileList {
 mod imp {
     use super::*;
 
-    #[derive(Debug)]
     pub struct WrenFileList {
         pub list_view: gtk4::ListView,
         pub cut_uris: Rc<RefCell<HashSet<String>>>,
@@ -483,7 +485,7 @@ mod imp {
         pub icon_size: Rc<Cell<u32>>,
         pub bound_rows: BoundRows,
         pub header_icon_spacer: gtk4::Box,
-        pub context_menu_model: RefCell<Option<gio::MenuModel>>,
+        pub context_menu_builder: RefCell<Option<Box<dyn Fn() -> gio::MenuModel>>>,
         pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub typeahead: Rc<TypeaheadState>,
     }
@@ -498,7 +500,7 @@ mod imp {
                 icon_size: Rc::new(Cell::new(24)),
                 bound_rows: Rc::new(RefCell::new(HashMap::new())),
                 header_icon_spacer: gtk4::Box::new(gtk4::Orientation::Horizontal, 0),
-                context_menu_model: RefCell::new(None),
+                context_menu_builder: RefCell::new(None),
                 context_popover: RefCell::new(None),
                 typeahead: Rc::new(TypeaheadState::default()),
             }

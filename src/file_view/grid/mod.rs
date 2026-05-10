@@ -356,15 +356,18 @@ impl WrenFileGrid {
         imp.grid_view.add_controller(drop);
     }
 
-    pub fn setup_context_menu(&self, menu: &gio::MenuModel) {
+    pub fn setup_context_menu<F: Fn() -> gio::MenuModel + 'static>(&self, builder: F) {
         let imp = imp::WrenFileGrid::from_obj(self);
-        // Stash the model for use in the gesture handler. We rebuild
-        // the popover on every right-click — the Nautilus pattern —
-        // because reusing a single PopoverMenu across right-clicks
-        // sometimes shows stale submenu state, and parenting to the
-        // outer composite widget (rather than the inner GridView) gives
-        // the popover correct measurement context.
-        imp.context_menu_model.replace(Some(menu.clone()));
+        // Stash the builder for use in the gesture handler. We rebuild
+        // both the menu model AND the popover on every right-click:
+        // re-running the builder lets the empty-area menu pick up
+        // dynamic items (e.g. ~/Templates contents) without listening
+        // for filesystem events. Reusing a single PopoverMenu across
+        // right-clicks sometimes shows stale submenu state, and
+        // parenting to the outer composite widget (rather than the
+        // inner GridView) gives the popover correct measurement
+        // context.
+        imp.context_menu_builder.replace(Some(Box::new(builder)));
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3);
         gesture.connect_pressed(glib::clone!(
@@ -376,7 +379,10 @@ impl WrenFileGrid {
 
     fn popup_context_menu(&self, x: f64, y: f64) {
         let imp = imp::WrenFileGrid::from_obj(self);
-        let Some(model) = imp.context_menu_model.borrow().clone() else { return };
+        let model = match imp.context_menu_builder.borrow().as_ref() {
+            Some(b) => b(),
+            None => return,
+        };
         // Drop the previous popover via unparent before building the
         // new one. Mirrors `g_clear_pointer(&p, gtk_widget_unparent)`.
         if let Some(old) = imp.context_popover.take() {
@@ -487,14 +493,13 @@ impl WrenFileGrid {
 mod imp {
     use super::*;
 
-    #[derive(Debug)]
     pub struct WrenFileGrid {
         pub grid_view: gtk4::GridView,
         pub icon_size: Rc<Cell<u32>>,
         pub cut_uris: Rc<RefCell<std::collections::HashSet<String>>>,
         pub show_extensions: Cell<bool>,
         pub bound_cells: BoundCells,
-        pub context_menu_model: RefCell<Option<gio::MenuModel>>,
+        pub context_menu_builder: RefCell<Option<Box<dyn Fn() -> gio::MenuModel>>>,
         pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub typeahead: Rc<TypeaheadState>,
     }
@@ -507,7 +512,7 @@ mod imp {
                 cut_uris: Rc::new(RefCell::new(std::collections::HashSet::new())),
                 show_extensions: Cell::new(true),
                 bound_cells: Rc::new(RefCell::new(HashMap::new())),
-                context_menu_model: RefCell::new(None),
+                context_menu_builder: RefCell::new(None),
                 context_popover: RefCell::new(None),
                 typeahead: Rc::new(TypeaheadState::default()),
             }

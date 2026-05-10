@@ -3,6 +3,7 @@ mod imp;
 mod operations;
 mod properties;
 pub mod tab;
+mod templates;
 mod trash;
 pub mod undo;
 
@@ -172,9 +173,18 @@ impl WrenWindow {
         tab.file_grid.connect_open_in_tab(new_tab_handler.clone());
         tab.file_list.connect_open_in_tab(new_tab_handler);
 
-        let menu = self.context_menu_model();
-        tab.file_grid.setup_context_menu(&menu);
-        tab.file_list.setup_context_menu(&menu);
+        let builder_grid = glib::clone!(
+            #[weak(rename_to = window)] self,
+            #[upgrade_or_else] || gio::Menu::new().upcast::<gio::MenuModel>(),
+            move || window.context_menu_model()
+        );
+        let builder_list = glib::clone!(
+            #[weak(rename_to = window)] self,
+            #[upgrade_or_else] || gio::Menu::new().upcast::<gio::MenuModel>(),
+            move || window.context_menu_model()
+        );
+        tab.file_grid.setup_context_menu(builder_grid);
+        tab.file_list.setup_context_menu(builder_list);
         tab.file_grid.setup_drop_target();
         tab.file_list.setup_drop_target();
         tab.file_grid.setup_empty_area_click();
@@ -888,6 +898,22 @@ impl WrenWindow {
 
         let file_section = gio::Menu::new();
         file_section.append(Some("New Folder"), Some("win.new-folder"));
+        // Append one item per ~/Templates entry, using a parameterised
+        // action so a single handler can dispatch on basename. The list
+        // is rebuilt on every right-click (see setup_context_menu) so
+        // adding/removing templates while wren is open Just Works.
+        let templates = templates::list_templates();
+        for (name, _path) in &templates {
+            let item = gio::MenuItem::new(
+                Some(&format!("New {name}")),
+                None,
+            );
+            item.set_action_and_target_value(
+                Some("win.new-from-template"),
+                Some(&name.to_variant()),
+            );
+            file_section.append_item(&item);
+        }
         file_section.append(Some("Duplicate"), Some("win.duplicate"));
         file_section.append(Some("Rename"), Some("win.rename"));
         file_section.append(Some("Create Link"), Some("win.create-link"));
@@ -1033,6 +1059,144 @@ impl WrenWindow {
             ),
         );
         dialog.present(Some(self));
+    }
+
+    /// Copy a file from ~/Templates into the current directory and
+    /// trigger inline rename on the new file (mirroring the New Folder
+    /// flow). `template_name` is the basename inside ~/Templates — we
+    /// resolve the source path here rather than embedding it in the
+    /// menu item, so a freshly-added template shows up on the next
+    /// right-click without restart.
+    pub fn new_from_template(&self, template_name: &str) {
+        let Some(parent) = self
+            .current_tab_index()
+            .and_then(|idx| {
+                let tabs = self.imp().tabs.borrow();
+                tabs.get(idx).and_then(|t| t.navigation.current().cloned())
+            })
+        else {
+            return;
+        };
+
+        let src_path = match templates::list_templates()
+            .into_iter()
+            .find(|(n, _)| n == template_name)
+        {
+            Some((_, p)) => p,
+            None => {
+                self.show_toast(&format!("Template not found: {template_name}"));
+                return;
+            }
+        };
+        let src = gio::File::for_path(&src_path);
+
+        let Some(dest) = file_ops::unique_dest(&parent, std::path::Path::new(template_name)) else {
+            self.show_toast("Could not pick a unique destination name");
+            return;
+        };
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)] self,
+            async move {
+                log_op("template", &src, Some(&dest));
+                let (fut, _) = src.copy_future(
+                    &dest,
+                    gio::FileCopyFlags::NONE,
+                    glib::Priority::DEFAULT,
+                );
+                match fut.await {
+                    Ok(()) => {
+                        window.reload();
+                        // The reload spawns an async enumerate; poll
+                        // briefly until the new file appears in the
+                        // model, then anchor inline rename. Falls back
+                        // to the centered dialog if the cell never
+                        // realises (cap iterations to avoid spinning).
+                        for _ in 0..20 {
+                            glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                            if window.find_in_current_model(&dest).is_some() {
+                                break;
+                            }
+                        }
+                        window.start_inline_rename_for(&dest);
+                    }
+                    Err(e) => {
+                        log_err("template", &src, Some(&dest), &e);
+                        window.show_toast(&format!(
+                            "Could not create from template: {e}"
+                        ));
+                    }
+                }
+            }
+        ));
+    }
+
+    /// Position of `file` in the current tab's filtered+sorted
+    /// selection model, or None if absent (e.g. reload not yet done).
+    fn find_in_current_model(&self, file: &gio::File) -> Option<u32> {
+        let idx = self.current_tab_index()?;
+        let tabs = self.imp().tabs.borrow();
+        let tab = tabs.get(idx)?;
+        let model = tab.dir_model.as_ref()?;
+        let n = model.selection.n_items();
+        for i in 0..n {
+            if let Some(obj) = model.selection.item(i).and_downcast::<FileObject>() {
+                if obj.file().equal(file) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Select `file` in the current tab's model and pop the inline
+    /// rename popover over its cell. Falls back to the centered dialog
+    /// if the cell isn't realised yet (e.g. reload still in flight).
+    fn start_inline_rename_for(&self, file: &gio::File) {
+        let Some(idx) = self.current_tab_index() else {
+            return;
+        };
+        let tabs = self.imp().tabs.borrow();
+        let Some(tab) = tabs.get(idx) else { return };
+        let Some(model) = tab.dir_model.as_ref() else { return };
+
+        // Find the new file in the (filtered, sorted) selection model.
+        let n = model.selection.n_items();
+        let mut found_pos: Option<u32> = None;
+        for i in 0..n {
+            if let Some(obj) = model.selection.item(i).and_downcast::<FileObject>() {
+                if obj.file().equal(file) {
+                    found_pos = Some(i);
+                    break;
+                }
+            }
+        }
+        if let Some(pos) = found_pos {
+            model.selection.select_item(pos, true);
+            tab.file_grid.scroll_to(pos, gtk4::ListScrollFlags::FOCUS);
+            tab.file_list.scroll_to(pos, gtk4::ListScrollFlags::FOCUS);
+        }
+        let current_name = file
+            .basename()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let anchor: Option<gtk4::Widget> = tab
+            .file_grid
+            .cell_for_file(file)
+            .map(|c| c.upcast::<gtk4::Widget>())
+            .or_else(|| {
+                tab.file_list
+                    .row_for_file(file)
+                    .map(|r| r.upcast::<gtk4::Widget>())
+            });
+        drop(tabs);
+
+        let file = file.clone();
+        if let Some(anchor) = anchor {
+            self.rename_selection_inline(file, current_name, &anchor);
+        } else {
+            self.rename_selection_dialog(file, current_name);
+        }
     }
 
     pub fn rename_selection(&self) {
@@ -2164,6 +2328,7 @@ impl WrenWindow {
         }
         // Folder-mutating actions: also disabled when viewing trash.
         self.action_set_enabled("win.new-folder", !in_trash);
+        self.action_set_enabled("win.new-from-template", !in_trash);
         let has_clipboard = self.imp().clipboard_files.borrow().is_some();
         self.action_set_enabled("win.paste", has_clipboard && !in_trash);
         // Restore needs in-trash AND a selection; Empty Trash is always
