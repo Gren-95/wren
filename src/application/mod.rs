@@ -3,6 +3,56 @@ mod imp;
 use adw::subclass::prelude::ObjectSubclassIsExt;
 use glib::Object;
 
+/// Persisted per-tab UI state. Serialised as
+/// `uri|sort_key|asc|grid` under `[Tabs] tabN=`. The pipe separator is
+/// safe because `|` is reserved by RFC 3986 and never appears in a URI.
+#[derive(Debug, Clone)]
+pub struct TabPref {
+    pub uri: String,
+    pub sort_key: String,
+    pub reversed: bool,
+    pub view_mode: String,
+}
+
+impl TabPref {
+    pub(crate) fn to_line(&self) -> String {
+        let dir = if self.reversed { "desc" } else { "asc" };
+        let view = if self.view_mode == "list" { "list" } else { "grid" };
+        let key = match self.sort_key.as_str() {
+            "size" | "date" | "type" => self.sort_key.as_str(),
+            _ => "name",
+        };
+        format!("{}|{}|{}|{}", self.uri, key, dir, view)
+    }
+
+    pub(crate) fn parse_line(s: &str) -> Option<Self> {
+        let mut parts = s.splitn(4, '|');
+        let uri = parts.next()?.to_string();
+        if uri.is_empty() {
+            return None;
+        }
+        let key = match parts.next().unwrap_or("name") {
+            "size" => "size",
+            "date" => "date",
+            "type" => "type",
+            _ => "name",
+        }
+        .to_string();
+        let reversed = matches!(parts.next().unwrap_or("asc"), "desc");
+        let view = match parts.next().unwrap_or("grid") {
+            "list" => "list",
+            _ => "grid",
+        }
+        .to_string();
+        Some(Self {
+            uri,
+            sort_key: key,
+            reversed,
+            view_mode: view,
+        })
+    }
+}
+
 /// Default number of locations kept in the sidebar's Recent section.
 pub const RECENTS_DEFAULT: usize = 10;
 /// Bounds for the user-configurable recents cap.
@@ -89,9 +139,9 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
-    pub fn last_tabs(&self) -> Vec<String> { self.imp().last_tabs.borrow().clone() }
-    pub fn set_last_tabs(&self, uris: Vec<String>, active_index: i32) {
-        *self.imp().last_tabs.borrow_mut() = uris;
+    pub fn tab_states(&self) -> Vec<TabPref> { self.imp().tab_states.borrow().clone() }
+    pub fn set_tab_states(&self, tabs: Vec<TabPref>, active_index: i32) {
+        *self.imp().tab_states.borrow_mut() = tabs;
         self.imp().last_tab_index.set(active_index);
         self.imp().save_settings();
     }

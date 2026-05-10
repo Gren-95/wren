@@ -10,7 +10,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use glib::Object;
 
-use crate::application::WrenApplication;
+use crate::application::{TabPref, WrenApplication};
 use crate::model::{DirectoryModel, FileObject, SortKey};
 use crate::window::tab::TabState;
 pub use file_ops::{OpHandle, OpKind};
@@ -37,21 +37,38 @@ impl WrenWindow {
             if let Some(app) = w.application().and_downcast::<WrenApplication>() {
                 app.set_window_maximized(w.is_maximized());
                 app.set_sidebar_visible(w.imp().split_view.shows_sidebar());
-                // Snapshot every open tab's current URI so the next
-                // launch can rebuild the same set. last_directory is
-                // kept up-to-date as a fallback for older configs.
+                // Snapshot every open tab's current URI plus its sort/view
+                // so the next launch can fully rebuild the session.
+                // last_directory is kept up-to-date as a fallback for older
+                // configs that read only [General].
                 let imp = w.imp();
                 let tabs = imp.tabs.borrow();
-                let uris: Vec<String> = tabs
+                let prefs: Vec<TabPref> = tabs
                     .iter()
-                    .filter_map(|t| t.navigation.current().map(|f| f.uri().to_string()))
+                    .filter_map(|t| {
+                        let uri = t.navigation.current().map(|f| f.uri().to_string())?;
+                        let view = t
+                            .view_stack
+                            .visible_child_name()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "grid".to_string());
+                        Some(TabPref {
+                            uri,
+                            sort_key: t.sort_key.as_str().to_string(),
+                            reversed: t.sort_reversed,
+                            view_mode: view,
+                        })
+                    })
                     .collect();
                 let active = w.current_tab_index().unwrap_or(0) as i32;
                 drop(tabs);
-                if !uris.is_empty() {
-                    app.set_last_directory(&uris[active.max(0) as usize]);
+                if !prefs.is_empty() {
+                    let i = active.max(0) as usize;
+                    if let Some(p) = prefs.get(i) {
+                        app.set_last_directory(&p.uri);
+                    }
                 }
-                app.set_last_tabs(uris, active);
+                app.set_tab_states(prefs, active);
             }
             glib::Propagation::Proceed
         });
@@ -88,6 +105,13 @@ impl WrenWindow {
     }
 
     pub fn add_tab(&self, location: gio::File) {
+        self.add_tab_with_state(location, None);
+    }
+
+    /// Add a tab and restore explicit per-tab state (sort key, direction,
+    /// view mode). When `pref` is `None`, the global app prefs are used —
+    /// the path taken for "New Tab" and the legacy single-tab fallback.
+    pub fn add_tab_with_state(&self, location: gio::File, pref: Option<&TabPref>) {
         let imp = self.imp();
         let mut tab = TabState::new();
 
@@ -158,15 +182,21 @@ impl WrenWindow {
         tab.file_grid.set_show_extensions(imp.show_extensions.get());
         tab.file_list.set_show_extensions(imp.show_extensions.get());
 
-        // Restore persisted view mode and sort for new tabs
-        if let Some(app) = self.application().and_downcast::<WrenApplication>() {
-            let mode = app.view_mode();
-            tab.view_stack.set_visible_child_name(&mode);
-            let sort_key = crate::model::SortKey::from_str(&app.sort_key());
-            tab.sort_key = sort_key;
-            tab.sort_reversed = app.sort_reversed();
-            tab.file_list.set_sort_state(sort_key.as_str(), tab.sort_reversed);
-        }
+        // Restore per-tab state when supplied (session restore), otherwise
+        // fall back to the global app prefs (used for new tabs and legacy).
+        let app = self.application().and_downcast::<WrenApplication>();
+        let (mode, sort_key_str, reversed) = if let Some(p) = pref {
+            (p.view_mode.clone(), p.sort_key.clone(), p.reversed)
+        } else if let Some(a) = &app {
+            (a.view_mode(), a.sort_key(), a.sort_reversed())
+        } else {
+            ("grid".to_string(), "name".to_string(), false)
+        };
+        tab.view_stack.set_visible_child_name(&mode);
+        let sort_key = crate::model::SortKey::from_str(&sort_key_str);
+        tab.sort_key = sort_key;
+        tab.sort_reversed = reversed;
+        tab.file_list.set_sort_state(sort_key.as_str(), reversed);
 
         let page = imp.tab_view.append(&tab.content_widget);
         page.set_title("Home");
