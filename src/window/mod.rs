@@ -1264,8 +1264,7 @@ impl WrenWindow {
 
         let uri = file.uri().to_string();
         let bookmarks_path = {
-            let mut p = glib::home_dir();
-            p.push(".config");
+            let mut p = glib::user_config_dir();
             p.push("gtk-3.0");
             p.push("bookmarks");
             p
@@ -2461,8 +2460,7 @@ impl WrenWindow {
 
     pub fn remove_bookmark(&self, uri: &str) {
         let bookmarks_path = {
-            let mut p = glib::home_dir();
-            p.push(".config");
+            let mut p = glib::user_config_dir();
             p.push("gtk-3.0");
             p.push("bookmarks");
             p
