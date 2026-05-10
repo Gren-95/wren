@@ -36,6 +36,9 @@ pub struct WrenApplication {
     pub show_copy_location: Cell<bool>,
     pub bookmarks_enabled: Cell<bool>,
     pub folders_first: Cell<bool>,
+    /// Action to take when activating an executable text file.
+    /// Stored as one of `"run"`, `"view"`, `"ask"`. Defaults to `"ask"`.
+    pub executable_text_action: RefCell<String>,
 }
 
 impl Default for WrenApplication {
@@ -68,6 +71,7 @@ impl Default for WrenApplication {
             show_copy_location: Cell::new(true),
             bookmarks_enabled: Cell::new(true),
             folders_first: Cell::new(true),
+            executable_text_action: RefCell::new("ask".to_string()),
         }
     }
 }
@@ -208,6 +212,12 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("Sort", "folders_first") {
                 self.folders_first.set(v);
             }
+            if let Ok(v) = kf.string("Files", "executable_text_action") {
+                let s = v.to_string();
+                if matches!(s.as_str(), "run" | "view" | "ask") {
+                    *self.executable_text_action.borrow_mut() = s;
+                }
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -268,6 +278,7 @@ impl WrenApplication {
         kf.set_boolean("ContextMenu", "show_copy_location", self.show_copy_location.get());
         kf.set_boolean("Sidebar", "bookmarks_enabled", self.bookmarks_enabled.get());
         kf.set_boolean("Sort", "folders_first", self.folders_first.get());
+        kf.set_string("Files", "executable_text_action", &self.executable_text_action.borrow());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

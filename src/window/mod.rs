@@ -123,13 +123,7 @@ impl WrenWindow {
                 if file_obj.is_directory() {
                     window.navigate_to(window.target_for_activation(file_obj));
                 } else {
-                    let uri = file_obj.file().uri();
-                    if let Err(e) = gio::AppInfo::launch_default_for_uri(
-                        uri.as_str(),
-                        gio::AppLaunchContext::NONE,
-                    ) {
-                        window.show_toast(&format!("Cannot open: {e}"));
-                    }
+                    window.activate_file_object(file_obj);
                 }
             }
         ));
@@ -140,13 +134,7 @@ impl WrenWindow {
                 if file_obj.is_directory() {
                     window.navigate_to(window.target_for_activation(file_obj));
                 } else {
-                    let uri = file_obj.file().uri();
-                    if let Err(e) = gio::AppInfo::launch_default_for_uri(
-                        uri.as_str(),
-                        gio::AppLaunchContext::NONE,
-                    ) {
-                        window.show_toast(&format!("Cannot open: {e}"));
-                    }
+                    window.activate_file_object(file_obj);
                 }
             }
         ));
@@ -160,13 +148,7 @@ impl WrenWindow {
                 if obj.is_directory() {
                     window.add_tab(window.target_for_activation(obj));
                 } else {
-                    let uri = obj.file().uri();
-                    if let Err(e) = gio::AppInfo::launch_default_for_uri(
-                        uri.as_str(),
-                        gio::AppLaunchContext::NONE,
-                    ) {
-                        window.show_toast(&format!("Cannot open: {e}"));
-                    }
+                    window.activate_file_object(obj);
                 }
             }
         );
@@ -1571,14 +1553,102 @@ impl WrenWindow {
                 self.navigate_to(self.target_for_activation(&obj));
                 return;
             }
-            let uri = obj.file().uri();
-            if let Err(e) = gio::AppInfo::launch_default_for_uri(
-                uri.as_str(),
-                gio::AppLaunchContext::NONE,
-            ) {
-                self.show_toast(&format!("Cannot open: {e}"));
+            self.activate_file_object(&obj);
+        }
+    }
+
+    /// Open a non-directory `FileObject` honoring the executable-text-action
+    /// preference. For executable text (a script with the execute bit set
+    /// whose content type is `text/*` or a known scripting MIME) the user's
+    /// configured action — Run, View, or Ask — decides between running the
+    /// script and opening it in the default editor. All other files (plain
+    /// text, binaries, documents, …) are routed through the default app.
+    pub fn activate_file_object(&self, obj: &FileObject) {
+        if is_executable_text(obj.file_info()) {
+            let policy = self
+                .application()
+                .and_downcast::<WrenApplication>()
+                .map(|a| a.executable_text_action())
+                .unwrap_or_else(|| "ask".to_string());
+            match policy.as_str() {
+                "run" => {
+                    self.run_text_file(obj.file());
+                    return;
+                }
+                "view" => {
+                    self.launch_default_for_object(obj);
+                    return;
+                }
+                _ => {
+                    self.ask_executable_text(obj);
+                    return;
+                }
             }
         }
+        self.launch_default_for_object(obj);
+    }
+
+    fn launch_default_for_object(&self, obj: &FileObject) {
+        let uri = obj.file().uri();
+        if let Err(e) = gio::AppInfo::launch_default_for_uri(
+            uri.as_str(),
+            gio::AppLaunchContext::NONE,
+        ) {
+            self.show_toast(&format!("Cannot open: {e}"));
+        }
+    }
+
+    /// Execute a script directly via `gio::Subprocess::newv`. Runs the file
+    /// detached; failures surface as a toast. Local files only — for
+    /// non-local URIs we fall back to a toast since execve needs a real path.
+    pub fn run_text_file(&self, file: &gio::File) {
+        let Some(path) = file.path() else {
+            self.show_toast("Cannot run: not a local file");
+            return;
+        };
+        let argv: [&std::ffi::OsStr; 1] = [path.as_os_str()];
+        match gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
+            Ok(_proc) => {
+                let name = file
+                    .basename()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                self.show_toast(&format!("Running {name}"));
+            }
+            Err(e) => self.show_toast(&format!("Cannot run: {e}")),
+        }
+    }
+
+    fn ask_executable_text(&self, obj: &FileObject) {
+        let name = obj
+            .file()
+            .basename()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| obj.name());
+        let body = format!("What would you like to do with \u{201C}{name}\u{201D}?");
+        let dialog = adw::AlertDialog::new(Some("Run executable text file?"), Some(&body));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("view", "Display");
+        dialog.add_response("run", "Run");
+        dialog.set_response_appearance("view", adw::ResponseAppearance::Suggested);
+        dialog.set_response_appearance("run", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let file = obj.file().clone();
+        let obj_clone = obj.clone();
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| match response {
+                    "run" => window.run_text_file(&file),
+                    "view" => window.launch_default_for_object(&obj_clone),
+                    _ => {}
+                }
+            ),
+        );
+        dialog.present(Some(self));
     }
 
     #[allow(deprecated)]
@@ -2021,6 +2091,43 @@ impl WrenWindow {
         ));
         sorting_group.add(&folders_first_row);
         page.add(&sorting_group);
+
+        // Files group
+        let files_group = adw::PreferencesGroup::new();
+        files_group.set_title("Files");
+
+        let exec_text_row = adw::ComboRow::new();
+        exec_text_row.set_title("Executable text files");
+        exec_text_row.set_subtitle("How to handle executable scripts when activated");
+        let exec_model = gtk4::StringList::new(&["Run", "Display", "Ask each time"]);
+        exec_text_row.set_model(Some(&exec_model));
+        let initial_exec = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.executable_text_action())
+            .unwrap_or_else(|| "ask".to_string());
+        let initial_idx: u32 = match initial_exec.as_str() {
+            "run" => 0,
+            "view" => 1,
+            _ => 2,
+        };
+        exec_text_row.set_selected(initial_idx);
+        exec_text_row.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let value = match row.selected() {
+                    0 => "run",
+                    1 => "view",
+                    _ => "ask",
+                };
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_executable_text_action(value);
+                }
+            }
+        ));
+        files_group.add(&exec_text_row);
+        page.add(&files_group);
 
         // Sidebar group
         let sidebar_group = adw::PreferencesGroup::new();
@@ -2995,6 +3102,46 @@ fn locate_desktop_file(id: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+// True when the file is executable text — a script the user might want to
+// run rather than open in an editor. Requires BOTH the executable bit set
+// (`access::can-execute`) AND a content type that's plain text or a known
+// scripting MIME (shell, python, perl, ruby, lua, php, awk, sed, tcl,
+// node/javascript, R). Plain text without the execute bit is just text;
+// executable binaries (no `text/*` ancestry) fall through to the OS via
+// the FileLauncher / desktop-registration path.
+fn is_executable_text(info: &gio::FileInfo) -> bool {
+    if !info.has_attribute(gio::FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE)
+        || !info.boolean(gio::FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE)
+    {
+        return false;
+    }
+    let Some(ct) = info.content_type() else {
+        return false;
+    };
+    let ct = ct.as_str();
+    if gio::content_type_is_a(ct, "text/plain") {
+        return true;
+    }
+    matches!(
+        ct,
+        "application/x-shellscript"
+            | "application/x-sh"
+            | "application/x-csh"
+            | "application/x-python"
+            | "application/x-python3"
+            | "application/x-perl"
+            | "application/x-ruby"
+            | "application/x-lua"
+            | "application/x-php"
+            | "application/x-awk"
+            | "application/x-sed"
+            | "application/x-tcl"
+            | "application/javascript"
+            | "application/x-javascript"
+            | "application/x-r"
+    )
 }
 
 // Single-quote a string for safe interpolation into a shell command.

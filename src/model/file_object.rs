@@ -43,7 +43,8 @@ impl FileObject {
         "standard::name,standard::display-name,standard::type,standard::icon,\
          standard::content-type,standard::size,standard::is-hidden,\
          standard::is-symlink,time::modified,access::can-delete,\
-         access::can-rename,access::can-read,thumbnail::path";
+         access::can-rename,access::can-read,access::can-execute,\
+         thumbnail::path";
 
     pub fn new(file: gio::File, info: gio::FileInfo) -> Self {
         let name = info.display_name().to_string();
@@ -117,5 +118,13 @@ impl FileObject {
         } else {
             true
         }
+    }
+
+    /// True when the current user has execute permission on the file.
+    /// Driven by `access::can-execute` (queried via QUERY_ATTRS).
+    pub fn is_executable(&self) -> bool {
+        let info = self.file_info();
+        info.has_attribute(gio::FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE)
+            && info.boolean(gio::FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE)
     }
 }
