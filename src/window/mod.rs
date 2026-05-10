@@ -2733,22 +2733,41 @@ impl WrenWindow {
 
     // ── Window size persistence ───────────────────────────────────────────────
 
-    pub fn setup_volume_monitor(&self) {
-        let monitor = gio::VolumeMonitor::get();
-        monitor.connect_mount_added(glib::clone!(
-            #[weak(rename_to = win)]
-            self,
-            move |_, _| {
-                win.imp().sidebar.reload_volumes();
+    /// After a successful unmount/eject, navigate any tab whose current
+    /// location lives under `unmounted_root` back to home. Returns true
+    /// if at least one tab was redirected.
+    pub fn leave_unmounted_root(&self, unmounted_root: &gio::File) -> bool {
+        let imp = self.imp();
+        let affected: Vec<usize> = {
+            let tabs = imp.tabs.borrow();
+            tabs.iter()
+                .enumerate()
+                .filter_map(|(i, t)| {
+                    let cur = t.navigation.current()?;
+                    if cur.equal(unmounted_root) || cur.has_prefix(unmounted_root) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        if affected.is_empty() {
+            return false;
+        }
+        let home = gio::File::for_path(glib::home_dir());
+        for idx in affected {
+            let maybe_loc = {
+                let mut tabs = imp.tabs.borrow_mut();
+                tabs.get_mut(idx)
+                    .and_then(|t| t.navigation.navigate_to(home.clone()))
+            };
+            if let Some(loc) = maybe_loc {
+                self.load_location_for_tab(idx, loc);
             }
-        ));
-        monitor.connect_mount_removed(glib::clone!(
-            #[weak(rename_to = win)]
-            self,
-            move |_, _| {
-                win.imp().sidebar.reload_volumes();
-            }
-        ));
+        }
+        self.update_nav_buttons();
+        true
     }
 
     /// Push a successfully-navigated directory onto the Recents MRU list and
