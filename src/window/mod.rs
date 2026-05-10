@@ -663,6 +663,15 @@ impl WrenWindow {
                         if !is_current {
                             return;
                         }
+                        // Successful load — clear any in-flight mount
+                        // retry guard so future failures can re-trigger
+                        // a credential prompt.
+                        {
+                            let tabs = window.imp().tabs.borrow();
+                            if let Some(tab) = tabs.get(tab_idx) {
+                                tab.mount_retry_in_flight.set(false);
+                            }
+                        }
                         // Browse mode: search is reset on navigation,
                         // so the only filter that hides items here is
                         // show-hidden. "no-results" therefore only fires
@@ -692,29 +701,39 @@ impl WrenWindow {
                         if !is_current {
                             return;
                         }
-                        // NOT_MOUNTED → the location is a remote share that
-                        // hasn't been auto-mounted yet (typical for SMB
-                        // entries discovered via avahi). Trigger an
-                        // explicit mount-enclosing-volume and reload on
-                        // success, so the user's click goes through
-                        // without an error page in the way.
-                        // NOT_DIRECTORY → user navigated to a path the
-                        // backend lists but isn't actually navigable
-                        // (macOS AppleDouble `._foo` metadata on SMB
-                        // shares is the canonical case). Don't try to
-                        // launch as a file — for non-file URIs that
-                        // pops the system "no apps for smb://…" dialog
-                        // which is worse than just leaving the user
-                        // where they were. Toast + step back, matching
-                        // Nautilus's behaviour.
-                        if e.matches(gio::IOErrorEnum::NotDirectory) {
-                            window.show_toast("Not a folder");
-                            window.navigate_back();
-                            return;
-                        }
-                        if e.matches(gio::IOErrorEnum::NotMounted) {
-                            let parent_window = window.upcast_ref::<gtk4::Window>();
-                            let op = gtk4::MountOperation::new(Some(parent_window));
+                        // For remote URIs (smb://, sftp://, dav://, …)
+                        // GVFS reports auth issues inconsistently: it
+                        // can be NOT_MOUNTED, NOT_DIRECTORY, or even
+                        // PERMISSION_DENIED depending on the backend.
+                        // Treat any of those as "try mount-enclosing-
+                        // volume to surface a credential prompt, then
+                        // reload". The mount_retry_in_flight flag
+                        // prevents an infinite loop if the post-mount
+                        // load also fails.
+                        let is_remote = location
+                            .uri_scheme()
+                            .map(|s| s.as_str() != "file")
+                            .unwrap_or(false);
+                        let is_auth_like = e.matches(gio::IOErrorEnum::NotMounted)
+                            || (is_remote
+                                && (e.matches(gio::IOErrorEnum::NotDirectory)
+                                    || e.matches(gio::IOErrorEnum::PermissionDenied)));
+                        let already_retried = {
+                            let tabs = window.imp().tabs.borrow();
+                            tabs.get(tab_idx)
+                                .map(|t| t.mount_retry_in_flight.get())
+                                .unwrap_or(false)
+                        };
+                        if is_auth_like && !already_retried {
+                            {
+                                let tabs = window.imp().tabs.borrow();
+                                if let Some(tab) = tabs.get(tab_idx) {
+                                    tab.mount_retry_in_flight.set(true);
+                                }
+                            }
+                            let parent_window: gtk4::Window =
+                                window.upcast_ref::<gtk4::Window>().clone();
+                            let op = gtk4::MountOperation::new(Some(&parent_window));
                             let op_g: gio::MountOperation = op.upcast();
                             let location_for_mount = location.clone();
                             glib::spawn_future_local(glib::clone!(
@@ -726,24 +745,44 @@ impl WrenWindow {
                                             Some(&op_g),
                                         )
                                         .await;
-                                    match result {
-                                        Ok(()) => {
-                                            window.load_location_for_tab(tab_idx, location_for_mount);
-                                        }
-                                        Err(mount_err) => {
-                                            if !mount_err.matches(gio::IOErrorEnum::AlreadyMounted) {
-                                                window.show_toast(&format!(
-                                                    "Could not mount: {}",
-                                                    mount_err.message()
-                                                ));
-                                            } else {
-                                                // Already mounted — just retry the load.
-                                                window.load_location_for_tab(tab_idx, location_for_mount);
-                                            }
+                                    let already_mounted = matches!(
+                                        &result,
+                                        Err(err) if err.matches(gio::IOErrorEnum::AlreadyMounted)
+                                    );
+                                    if result.is_ok() || already_mounted {
+                                        window.load_location_for_tab(tab_idx, location_for_mount);
+                                        return;
+                                    }
+                                    {
+                                        let tabs = window.imp().tabs.borrow();
+                                        if let Some(tab) = tabs.get(tab_idx) {
+                                            tab.mount_retry_in_flight.set(false);
                                         }
                                     }
+                                    let mount_err = result.unwrap_err();
+                                    if !mount_err.matches(gio::IOErrorEnum::FailedHandled) {
+                                        window.show_toast(&format!(
+                                            "Could not mount: {}",
+                                            mount_err.message()
+                                        ));
+                                    }
+                                    window.navigate_back();
                                 }
                             ));
+                            return;
+                        }
+                        // Already retried with a mount and it still
+                        // failed → fall through to the normal error
+                        // path. Clear the flag.
+                        {
+                            let tabs = window.imp().tabs.borrow();
+                            if let Some(tab) = tabs.get(tab_idx) {
+                                tab.mount_retry_in_flight.set(false);
+                            }
+                        }
+                        if e.matches(gio::IOErrorEnum::NotDirectory) {
+                            window.show_toast("Not a folder");
+                            window.navigate_back();
                             return;
                         }
                         {

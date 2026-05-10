@@ -23,6 +23,10 @@ pub struct TabState {
     pub filter_category: Cell<MimeCategory>,
     pub status_bar: gtk4::Label,
     pub load_gen: Cell<u64>,
+    /// True between issuing mount_enclosing_volume_future as recovery
+    /// and the resulting reload completing. Prevents infinite loops:
+    /// if the post-mount load ALSO fails, don't try to mount again.
+    pub mount_retry_in_flight: Cell<bool>,
 }
 
 impl TabState {
@@ -100,6 +104,7 @@ impl TabState {
             filter_category: Cell::new(MimeCategory::All),
             status_bar,
             load_gen: Cell::new(0),
+            mount_retry_in_flight: Cell::new(false),
         }
     }
 
