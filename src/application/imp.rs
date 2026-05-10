@@ -30,6 +30,7 @@ pub struct WrenApplication {
     pub recents_enabled: Cell<bool>,
     pub recents_cap: Cell<usize>,
     pub thumbnail_cache_size: Cell<usize>,
+    pub thumbnail_policy: Cell<u8>,
     pub show_duplicate: Cell<bool>,
     pub show_create_link: Cell<bool>,
     pub show_add_bookmark: Cell<bool>,
@@ -70,6 +71,7 @@ impl Default for WrenApplication {
             recents_enabled: Cell::new(false),
             recents_cap: Cell::new(super::RECENTS_DEFAULT),
             thumbnail_cache_size: Cell::new(super::THUMB_CACHE_DEFAULT),
+            thumbnail_policy: Cell::new(super::THUMB_POLICY_ALWAYS),
             show_duplicate: Cell::new(true),
             show_create_link: Cell::new(true),
             show_add_bookmark: Cell::new(true),
@@ -206,6 +208,10 @@ impl WrenApplication {
                 let clamped = (v as usize).clamp(super::THUMB_CACHE_MIN, super::THUMB_CACHE_MAX);
                 self.thumbnail_cache_size.set(clamped);
             }
+            if let Ok(v) = kf.string("Performance", "thumbnail_policy") {
+                self.thumbnail_policy
+                    .set(super::thumbnail_policy_from_str(v.as_str()));
+            }
             if let Ok(v) = kf.boolean("ContextMenu", "show_duplicate") {
                 self.show_duplicate.set(v);
             }
@@ -308,6 +314,11 @@ impl WrenApplication {
             "thumbnail_cache_size",
             self.thumbnail_cache_size.get() as i32,
         );
+        kf.set_string(
+            "Performance",
+            "thumbnail_policy",
+            super::thumbnail_policy_to_str(self.thumbnail_policy.get()),
+        );
         kf.set_boolean("ContextMenu", "show_duplicate", self.show_duplicate.get());
         kf.set_boolean("ContextMenu", "show_create_link", self.show_create_link.get());
         kf.set_boolean("ContextMenu", "show_add_bookmark", self.show_add_bookmark.get());
@@ -384,6 +395,7 @@ impl ApplicationImpl for WrenApplication {
         self.load_settings();
         crate::logging::set_enabled(self.debug_logging.get());
         crate::file_view::cell::set_thumbnail_cache_cap(self.thumbnail_cache_size.get());
+        crate::file_view::cell::set_thumbnail_policy(self.thumbnail_policy.get());
         crate::model::directory_model::set_folders_first(self.folders_first.get());
         let app = self.obj();
 

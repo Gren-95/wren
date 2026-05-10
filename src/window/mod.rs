@@ -724,6 +724,21 @@ impl WrenWindow {
         }
     }
 
+    /// Reload every open tab. Used when a global setting flips the way
+    /// cells render (currently only thumbnail policy).
+    pub fn reload_all_tabs(&self) {
+        let targets: Vec<(usize, gio::File)> = {
+            let tabs = self.imp().tabs.borrow();
+            tabs.iter()
+                .enumerate()
+                .filter_map(|(idx, t)| t.navigation.current().cloned().map(|f| (idx, f)))
+                .collect()
+        };
+        for (idx, loc) in targets {
+            self.load_location_for_tab(idx, loc);
+        }
+    }
+
     /// Re-run the sort on every tab's directory model. Used when a global
     /// sort preference (e.g. folders-first) changes — the comparator picks
     /// up the new value automatically; we just need to invalidate cached
@@ -1987,6 +2002,42 @@ impl WrenWindow {
             }
         ));
         performance_group.add(&thumb_cache_row);
+
+        let policy_row = adw::ComboRow::new();
+        policy_row.set_title("Show thumbnails");
+        policy_row.set_subtitle("Skip generating image previews for remote files");
+        let policy_model = gtk4::StringList::new(&["Always", "Local files only", "Never"]);
+        policy_row.set_model(Some(&policy_model));
+        let initial_policy = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.thumbnail_policy())
+            .unwrap_or(crate::application::THUMB_POLICY_ALWAYS);
+        policy_row.set_selected(initial_policy as u32);
+        policy_row.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let Some(app) = window.application().and_downcast::<WrenApplication>() else {
+                    return;
+                };
+                let new_policy = match row.selected() {
+                    1 => crate::application::THUMB_POLICY_LOCAL,
+                    2 => crate::application::THUMB_POLICY_NEVER,
+                    _ => crate::application::THUMB_POLICY_ALWAYS,
+                };
+                if new_policy == app.thumbnail_policy() {
+                    return;
+                }
+                app.set_thumbnail_policy(new_policy);
+                // Stale textures may now be wrong (e.g. a file flipped
+                // from "shown" to "hidden") — drop them and rebind every
+                // open tab so the icon falls back / re-renders.
+                crate::file_view::cell::clear_thumbnail_cache();
+                window.reload_all_tabs();
+            }
+        ));
+        performance_group.add(&policy_row);
         page.add(&performance_group);
 
         // Context menu group
