@@ -303,8 +303,46 @@ impl WrenSidebar {
         let imp = self.imp();
         let list = &imp.list_box;
         let monitor = gio::VolumeMonitor::get();
-        let mounts: Vec<gio::Mount> = monitor.mounts();
+        let raw_mounts: Vec<gio::Mount> = monitor.mounts();
         let volumes: Vec<gio::Volume> = monitor.volumes();
+
+        // Dedupe within the mounts list itself — GOA registers each
+        // cloud account through both its own backend (goa://, lock-style
+        // icon) AND the file-protocol GVFS layer (google-drive://,
+        // server-style icon). Both are real gio::Mount objects with the
+        // same display name. Keep one per (lowercase) name; prefer the
+        // one whose URI scheme is the canonical file-protocol over the
+        // generic goa:// proxy when both are present.
+        let mounts: Vec<gio::Mount> = {
+            use std::collections::HashMap;
+            let mut by_name: HashMap<String, gio::Mount> = HashMap::new();
+            let mut order: Vec<String> = Vec::new();
+            for m in raw_mounts.into_iter() {
+                let key = m.name().to_string().to_lowercase();
+                let scheme = m.root().uri_scheme().map(|s| s.to_string()).unwrap_or_default();
+                let prefer = !matches!(scheme.as_str(), "goa");
+                match by_name.get(&key) {
+                    Some(existing) => {
+                        let existing_scheme = existing
+                            .root()
+                            .uri_scheme()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        let existing_prefer = !matches!(existing_scheme.as_str(), "goa");
+                        // Replace only when the new mount is preferred
+                        // and the existing one isn't.
+                        if prefer && !existing_prefer {
+                            by_name.insert(key, m);
+                        }
+                    }
+                    None => {
+                        order.push(key.clone());
+                        by_name.insert(key, m);
+                    }
+                }
+            }
+            order.into_iter().filter_map(|k| by_name.remove(&k)).collect()
+        };
 
         // Build a fingerprint of every already-mounted thing so unmounted
         // volumes that point at the same backing account/device can be
