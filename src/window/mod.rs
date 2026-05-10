@@ -977,6 +977,9 @@ impl WrenWindow {
 
     // ── Search ───────────────────────────────────────────────────────────────
 
+    /// Cap on the in-memory MRU of submitted search queries. Session-only.
+    const SEARCH_HISTORY_MAX: usize = 20;
+
     pub fn toggle_search(&self) {
         let imp = self.imp();
         let active = !imp.search_bar.is_search_mode();
@@ -985,6 +988,62 @@ impl WrenWindow {
         if active {
             imp.search_entry.grab_focus();
         }
+    }
+
+    /// Push the current search entry text onto the session MRU. Empty
+    /// strings and exact-match-of-most-recent are skipped.
+    fn push_search_history(&self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let imp = self.imp();
+        let mut list = imp.search_history.borrow_mut();
+        if list.first().map_or(false, |s| s == trimmed) {
+            return;
+        }
+        list.retain(|s| s != trimmed);
+        list.insert(0, trimmed.to_string());
+        list.truncate(Self::SEARCH_HISTORY_MAX);
+    }
+
+    /// Pending-buffer pattern Up/Down through `search_history`.
+    /// `delta` = -1 for Up (older), +1 for Down (newer).
+    fn search_history_step(&self, delta: i32) {
+        let imp = self.imp();
+        let history = imp.search_history.borrow().clone();
+        if history.is_empty() {
+            return;
+        }
+        let entry = &*imp.search_entry;
+        let current = imp.search_history_index.borrow().clone();
+
+        let new_index: Option<i32> = match (current, delta) {
+            (None, -1) => {
+                imp.search_history_pending.replace(entry.text().to_string());
+                Some(0)
+            }
+            (None, _) => return,
+            (Some(i), -1) => Some((i as i32 + 1).min(history.len() as i32 - 1)),
+            (Some(i), 1) => {
+                let next = i as i32 - 1;
+                if next < 0 { None } else { Some(next) }
+            }
+            _ => return,
+        };
+
+        match new_index {
+            Some(i) => {
+                imp.search_history_index.replace(Some(i as usize));
+                entry.set_text(&history[i as usize]);
+            }
+            None => {
+                imp.search_history_index.replace(None);
+                let pending = imp.search_history_pending.borrow().clone();
+                entry.set_text(&pending);
+            }
+        }
+        entry.set_position(-1);
     }
 
     pub fn setup_search(&self) {
@@ -1023,6 +1082,38 @@ impl WrenWindow {
                 }
             }
         ));
+
+        // Enter on the search entry commits the current query into the
+        // session MRU. SearchEntry's `activate` fires on Enter.
+        imp.search_entry.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |entry| {
+                window.push_search_history(&entry.text());
+                window.imp().search_history_index.replace(None);
+            }
+        ));
+
+        // Up/Down arrow walks history; any other key resets nav state.
+        let key_ctrl = gtk4::EventControllerKey::new();
+        key_ctrl.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            #[upgrade_or] glib::Propagation::Proceed,
+            move |_, key, _, _| {
+                if key == gtk4::gdk::Key::Up {
+                    window.search_history_step(-1);
+                    glib::Propagation::Stop
+                } else if key == gtk4::gdk::Key::Down {
+                    window.search_history_step(1);
+                    glib::Propagation::Stop
+                } else {
+                    window.imp().search_history_index.replace(None);
+                    glib::Propagation::Proceed
+                }
+            }
+        ));
+        imp.search_entry.add_controller(key_ctrl);
     }
 
     pub fn apply_extensions_setting(&self) {

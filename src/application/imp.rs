@@ -59,6 +59,7 @@ pub struct WrenApplication {
     pub executable_text_action: RefCell<String>,
     pub single_click: Cell<bool>,
     pub settings_flat: Cell<bool>,
+    pub path_history: RefCell<Vec<String>>,
 }
 
 impl Default for WrenApplication {
@@ -112,6 +113,7 @@ impl Default for WrenApplication {
             executable_text_action: RefCell::new("ask".to_string()),
             single_click: Cell::new(false),
             settings_flat: Cell::new(false),
+            path_history: RefCell::new(Vec::new()),
         }
     }
 }
@@ -339,6 +341,19 @@ impl WrenApplication {
                 uris.truncate(self.recents_cap.get());
                 *self.recent_uris.borrow_mut() = uris;
             }
+            // \t can't appear in a typed path either (paths can't contain
+            // raw tabs in any real-world scenario; if they do, persistence
+            // simply drops the affected entry). Same shape as recent_uris.
+            if let Ok(joined) = kf.string("PathHistory", "entries") {
+                let s = joined.to_string();
+                let mut entries: Vec<String> = if s.is_empty() {
+                    Vec::new()
+                } else {
+                    s.split('\t').map(|s| s.to_string()).collect()
+                };
+                entries.truncate(super::PATH_HISTORY_MAX);
+                *self.path_history.borrow_mut() = entries;
+            }
         }
     }
 
@@ -421,6 +436,7 @@ impl WrenApplication {
         kf.set_boolean("ListColumns", "group", self.show_col_group.get());
         kf.set_boolean("ListColumns", "accessed", self.show_col_accessed.get());
         kf.set_string("Files", "executable_text_action", &self.executable_text_action.borrow());
+        kf.set_string("PathHistory", "entries", &self.path_history.borrow().join("\t"));
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

@@ -87,6 +87,9 @@ pub fn thumbnail_policy_from_str(s: &str) -> u8 {
     }
 }
 
+/// Maximum number of typed paths remembered for the Ctrl+L Up/Down history.
+pub const PATH_HISTORY_MAX: usize = 50;
+
 glib::wrapper! {
     pub struct WrenApplication(ObjectSubclass<imp::WrenApplication>)
         @extends adw::Application, gtk4::Application, gio::Application,
@@ -436,5 +439,27 @@ impl WrenApplication {
         drop(list);
         self.imp().save_settings();
         true
+    }
+
+    pub fn path_history(&self) -> Vec<String> {
+        self.imp().path_history.borrow().clone()
+    }
+
+    /// Push `text` to the front of the path-bar history (MRU), deduplicating
+    /// any prior occurrence and capping at `PATH_HISTORY_MAX`. Persists.
+    pub fn push_path_history(&self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let mut list = self.imp().path_history.borrow_mut();
+        if list.first().map_or(false, |s| s == trimmed) {
+            return;
+        }
+        list.retain(|s| s != trimmed);
+        list.insert(0, trimmed.to_string());
+        list.truncate(PATH_HISTORY_MAX);
+        drop(list);
+        self.imp().save_settings();
     }
 }

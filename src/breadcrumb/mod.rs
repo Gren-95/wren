@@ -219,12 +219,14 @@ impl WrenBreadcrumbBar {
         } else {
             gio::File::for_path(text)
         };
-
         // Resolve the file type before deciding what to do: directories
         // navigate, regular files open in their default app via
         // GtkFileLauncher (which uses portals when needed). Errors —
         // typically G_IO_ERROR_NOT_FOUND for typos — surface as a toast
         // and leave the entry focused so the user can edit and retry.
+        // The submitted text is pushed to the path history regardless
+        // (typos worth recalling so the user can fix and retry).
+        let typed_text = text.to_string();
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = bar)]
             self,
@@ -243,6 +245,16 @@ impl WrenBreadcrumbBar {
                     .root()
                     .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok());
 
+                if let Some(ref win) = win {
+                    if let Some(app) = win
+                        .application()
+                        .and_downcast::<crate::application::WrenApplication>()
+                    {
+                        app.push_path_history(&typed_text);
+                    }
+                }
+                bar.imp().history_index.replace(None);
+
                 match info {
                     Ok(info) if info.file_type() == gio::FileType::Directory => {
                         if let Some(win) = win {
@@ -259,9 +271,6 @@ impl WrenBreadcrumbBar {
                         bar.imp().path_entry.set_text("");
                         bar.leave_edit_mode();
                         if let (Err(e), Some(win)) = (launch_res, win) {
-                            // The user dismissing the "no app" chooser
-                            // returns G_IO_ERROR_FAILED with code DISMISSED;
-                            // don't toast that.
                             if !e.matches(gtk4::DialogError::Dismissed) {
                                 win.show_toast(&format!("Cannot open: {e}"));
                             }
