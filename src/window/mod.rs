@@ -13,7 +13,7 @@ use adw::subclass::prelude::*;
 use glib::Object;
 
 use crate::application::{TabPref, WrenApplication};
-use crate::model::{DirectoryModel, FileObject, SortKey};
+use crate::model::{DirectoryModel, FileObject, MimeCategory, SortKey};
 use crate::window::tab::TabState;
 pub use file_ops::{OpHandle, OpKind};
 use file_ops::{fmt_path, format_duration, log_err, log_op};
@@ -246,7 +246,7 @@ impl WrenWindow {
         let Some(idx) = self.current_tab_index() else {
             return;
         };
-        let (mode, sort_key, sort_reversed, window_title);
+        let (mode, sort_key, sort_reversed, filter_category, window_title);
         {
             let imp = self.imp();
             let tabs = imp.tabs.borrow();
@@ -261,6 +261,7 @@ impl WrenWindow {
                 .unwrap_or_else(|| "grid".to_string());
             sort_key = tab.sort_key;
             sort_reversed = tab.sort_reversed;
+            filter_category = tab.filter_category.get();
             window_title = tab
                 .navigation
                 .current()
@@ -295,6 +296,14 @@ impl WrenWindow {
                 a.set_state(&sort_reversed.to_variant());
             }
         }
+
+        // Sync mime-filter action state + button indicator
+        if let Some(a) = self.lookup_action("set-mime-filter") {
+            if let Ok(a) = a.downcast::<gio::SimpleAction>() {
+                a.set_state(&filter_category.as_str().to_variant());
+            }
+        }
+        self.update_filter_button_indicator(filter_category);
 
         // Apply current zoom to the newly-selected tab's grid
         self.apply_zoom();
@@ -495,6 +504,27 @@ impl WrenWindow {
         let search_text = imp.search_entry.text().to_lowercase();
         let show_hidden = imp.show_hidden.get();
         dir_model.set_filter(&search_text, show_hidden);
+
+        // Reset the mime filter to All on every navigation (per-tab, in
+        // memory only — same lifecycle as the search text).
+        {
+            let tabs = imp.tabs.borrow();
+            if let Some(tab) = tabs.get(tab_idx) {
+                tab.filter_category.set(MimeCategory::All);
+            }
+        }
+        dir_model.set_category(MimeCategory::All);
+        // Reflect the reset in the action state + button indicator if this
+        // is the active tab.
+        if Some(tab_idx) == self.current_tab_index() {
+            if let Some(a) = self
+                .lookup_action("set-mime-filter")
+                .and_downcast::<gio::SimpleAction>()
+            {
+                a.set_state(&"all".to_variant());
+            }
+            self.update_filter_button_indicator(MimeCategory::All);
+        }
 
         // Apply the current tab's sort state to the new model
         let (sort_key, sort_reversed) = {
@@ -893,6 +923,49 @@ impl WrenWindow {
             if let Some(model) = tab.dir_model.as_ref() {
                 model.set_sort(tab.sort_key, tab.sort_reversed);
             }
+        }
+    }
+
+    // ── Mime filter ──────────────────────────────────────────────────────────
+
+    /// Set the active mime-category filter for the current tab. Mirrors the
+    /// per-tab sort setters: stores the value on TabState, pushes it into
+    /// the live DirectoryModel, then updates the toolbar button styling.
+    pub fn set_mime_filter(&self, key_str: &str) {
+        let Some(idx) = self.current_tab_index() else { return };
+        let category = MimeCategory::from_str(key_str);
+        {
+            let tabs = self.imp().tabs.borrow();
+            let Some(tab) = tabs.get(idx) else { return };
+            tab.filter_category.set(category);
+            if let Some(model) = tab.dir_model.as_ref() {
+                model.set_category(category);
+            }
+            if tab.content_stack.visible_child_name().as_deref() == Some("no-results") {
+                tab.content_stack.set_visible_child_name("files");
+            }
+        }
+        self.update_filter_button_indicator(category);
+    }
+
+    /// Reflect the active mime-filter on the toolbar button: tinted with
+    /// `.has-active-filter` and a category-specific icon when not All,
+    /// neutral funnel icon otherwise.
+    fn update_filter_button_indicator(&self, category: MimeCategory) {
+        let btn = &self.imp().filter_button;
+        let icon = match category {
+            MimeCategory::All => "funnel-symbolic",
+            MimeCategory::Images => "image-x-generic-symbolic",
+            MimeCategory::Videos => "video-x-generic-symbolic",
+            MimeCategory::Audio => "audio-x-generic-symbolic",
+            MimeCategory::Documents => "x-office-document-symbolic",
+            MimeCategory::Archives => "package-x-generic-symbolic",
+        };
+        btn.set_icon_name(icon);
+        if matches!(category, MimeCategory::All) {
+            btn.remove_css_class("has-active-filter");
+        } else {
+            btn.add_css_class("has-active-filter");
         }
     }
 

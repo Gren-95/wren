@@ -188,6 +188,20 @@ button.wren-breadcrumb:drop(active) {
   padding: 12px;
 }
 
+/* ── Mime-filter toolbar button ───────────────────────────────────────────
+   Tint the filter button with the accent colour while a non-All category
+   is active so the user has an at-a-glance indicator of an applied
+   filter. We target the button directly (the class is on the button)
+   and use color: alpha() to avoid an opacity layer. */
+button.wren-filter-button.has-active-filter {
+  color: @accent_color;
+  background-color: alpha(@accent_color, 0.15);
+}
+
+button.wren-filter-button.has-active-filter:hover {
+  background-color: alpha(@accent_color, 0.25);
+}
+
 /* ── Sidebar ──────────────────────────────────────────────────────────────
    The header-bar toggle: GTK paints a tinted background when a flat
    GtkToggleButton is `:checked` to indicate state. The icon (sidebar-show-)

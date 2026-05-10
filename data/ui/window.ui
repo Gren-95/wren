@@ -96,6 +96,17 @@
                 </style>
               </object>
             </child>
+            <child type="end">
+              <object class="GtkMenuButton" id="filter_button">
+                <property name="icon-name">funnel-symbolic</property>
+                <property name="direction">none</property>
+                <property name="tooltip-text">Filter by Type</property>
+                <style>
+                  <class name="flat"/>
+                  <class name="wren-filter-button"/>
+                </style>
+              </object>
+            </child>
           </object>
         </child>
         <child type="top">
