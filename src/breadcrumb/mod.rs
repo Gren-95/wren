@@ -219,12 +219,63 @@ impl WrenBreadcrumbBar {
         } else {
             gio::File::for_path(text)
         };
-        if let Some(win) = self
-            .root()
-            .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
-        {
-            win.navigate_to(file);
-        }
+
+        // Resolve the file type before deciding what to do: directories
+        // navigate, regular files open in their default app via
+        // GtkFileLauncher (which uses portals when needed). Errors —
+        // typically G_IO_ERROR_NOT_FOUND for typos — surface as a toast
+        // and leave the entry focused so the user can edit and retry.
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = bar)]
+            self,
+            #[strong]
+            file,
+            async move {
+                let info = file
+                    .query_info_future(
+                        gio::FILE_ATTRIBUTE_STANDARD_TYPE,
+                        gio::FileQueryInfoFlags::NONE,
+                        glib::Priority::DEFAULT,
+                    )
+                    .await;
+
+                let win = bar
+                    .root()
+                    .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok());
+
+                match info {
+                    Ok(info) if info.file_type() == gio::FileType::Directory => {
+                        if let Some(win) = win {
+                            win.navigate_to(file);
+                        }
+                    }
+                    Ok(_) => {
+                        let parent_window = bar
+                            .root()
+                            .and_then(|r| r.downcast::<gtk4::Window>().ok());
+                        let launcher = gtk4::FileLauncher::new(Some(&file));
+                        let launch_res =
+                            launcher.launch_future(parent_window.as_ref()).await;
+                        bar.imp().path_entry.set_text("");
+                        bar.leave_edit_mode();
+                        if let (Err(e), Some(win)) = (launch_res, win) {
+                            // The user dismissing the "no app" chooser
+                            // returns G_IO_ERROR_FAILED with code DISMISSED;
+                            // don't toast that.
+                            if !e.matches(gtk4::DialogError::Dismissed) {
+                                win.show_toast(&format!("Cannot open: {e}"));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(win) = win {
+                            win.show_toast(&format!("Cannot open: {e}"));
+                        }
+                        bar.imp().path_entry.grab_focus();
+                    }
+                }
+            }
+        ));
     }
 }
 
