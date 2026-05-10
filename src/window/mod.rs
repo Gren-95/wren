@@ -2028,6 +2028,101 @@ impl WrenWindow {
         self.imp().breadcrumb_bar.enter_edit_mode();
     }
 
+    /// Show an "Open Location" dialog. The user types any URI
+    /// (`sftp://…`, `smb://…`, `file:///…`) or path / `~`-expanded
+    /// path and presses Enter to navigate. Mirrors the breadcrumb's
+    /// `navigate_to_text` resolution: scheme → for_uri, otherwise
+    /// expand `~` and treat as a local path.
+    pub fn open_location(&self) {
+        let dialog = adw::AlertDialog::new(
+            Some("Open Location"),
+            Some("Type a URI (sftp://, smb://, file://, …)"),
+        );
+
+        let entry = gtk4::Entry::new();
+        entry.set_placeholder_text(Some("Location"));
+        entry.set_activates_default(true);
+        entry.set_hexpand(true);
+        entry.set_width_chars(40);
+        if let Some(file) = self.current_location() {
+            entry.set_text(&file.uri());
+        }
+
+        dialog.set_extra_child(Some(&entry));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("open", "Open");
+        dialog.set_response_appearance("open", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("open"));
+        dialog.set_close_response("cancel");
+
+        // Single Enter triggers the "open" response: the entry's
+        // activates_default flag plus the dialog's default_response =
+        // "open" wires Enter through to the dialog's response signal.
+
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)] self,
+                #[weak] entry,
+                move |_, response| {
+                    if response != "open" {
+                        return;
+                    }
+                    let text = entry.text().to_string();
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        return;
+                    }
+                    let file = if crate::breadcrumb::has_uri_scheme(trimmed) {
+                        gio::File::for_uri(trimmed)
+                    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+                        let mut p = glib::home_dir();
+                        p.push(rest);
+                        gio::File::for_path(p)
+                    } else if trimmed == "~" {
+                        gio::File::for_path(glib::home_dir())
+                    } else {
+                        gio::File::for_path(trimmed)
+                    };
+
+                    glib::spawn_future_local(glib::clone!(
+                        #[weak] window,
+                        #[strong] file,
+                        async move {
+                            let info = file
+                                .query_info_future(
+                                    gio::FILE_ATTRIBUTE_STANDARD_TYPE,
+                                    gio::FileQueryInfoFlags::NONE,
+                                    glib::Priority::DEFAULT,
+                                )
+                                .await;
+                            match info {
+                                Ok(info) if info.file_type() == gio::FileType::Directory => {
+                                    window.navigate_to(file);
+                                }
+                                Ok(_) => {
+                                    let launcher = gtk4::FileLauncher::new(Some(&file));
+                                    let res = launcher
+                                        .launch_future(Some(&window))
+                                        .await;
+                                    if let Err(e) = res {
+                                        if !e.matches(gtk4::DialogError::Dismissed) {
+                                            window.show_toast(&format!("Cannot open: {e}"));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    window.show_toast(&format!("Cannot open: {e}"));
+                                }
+                            }
+                        }
+                    ));
+                }
+            ),
+        );
+
+        dialog.present(Some(self));
+    }
 
     pub fn open_settings(&self) {
         let dialog = adw::PreferencesDialog::new();
