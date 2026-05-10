@@ -1937,9 +1937,33 @@ impl WrenWindow {
         let dialog = adw::PreferencesDialog::new();
         dialog.set_title("Settings");
 
-        let page = adw::PreferencesPage::new();
-        page.set_title("General");
-        page.set_icon_name(Some("preferences-other-symbolic"));
+        let general_page = adw::PreferencesPage::new();
+        general_page.set_title("General");
+        general_page.set_icon_name(Some("preferences-other-symbolic"));
+
+        let files_page = adw::PreferencesPage::new();
+        files_page.set_title("Files");
+        files_page.set_icon_name(Some("folder-symbolic"));
+
+        let views_page = adw::PreferencesPage::new();
+        views_page.set_title("Views");
+        views_page.set_icon_name(Some("view-grid-symbolic"));
+
+        let sidebar_page = adw::PreferencesPage::new();
+        sidebar_page.set_title("Sidebar");
+        sidebar_page.set_icon_name(Some("sidebar-show-symbolic"));
+
+        let performance_page = adw::PreferencesPage::new();
+        performance_page.set_title("Performance");
+        performance_page.set_icon_name(Some("emblem-system-symbolic"));
+
+        let context_page = adw::PreferencesPage::new();
+        context_page.set_title("Context Menu");
+        context_page.set_icon_name(Some("view-list-symbolic"));
+
+        let advanced_page = adw::PreferencesPage::new();
+        advanced_page.set_title("Advanced");
+        advanced_page.set_icon_name(Some("applications-engineering-symbolic"));
 
         // Appearance group
         let appearance_group = adw::PreferencesGroup::new();
@@ -2014,7 +2038,7 @@ impl WrenWindow {
             }
         ));
         appearance_group.add(&anim_row);
-        page.add(&appearance_group);
+        general_page.add(&appearance_group);
 
         // Terminal group
         let group = adw::PreferencesGroup::new();
@@ -2048,7 +2072,7 @@ impl WrenWindow {
         ));
 
         group.add(&row);
-        page.add(&group);
+        advanced_page.add(&group);
 
         // Cache group
         let cache_group = adw::PreferencesGroup::new();
@@ -2073,7 +2097,7 @@ impl WrenWindow {
 
         cache_row.add_suffix(&clear_btn);
         cache_group.add(&cache_row);
-        page.add(&cache_group);
+        performance_page.add(&cache_group);
 
         // Performance group
         let performance_group = adw::PreferencesGroup::new();
@@ -2176,7 +2200,7 @@ impl WrenWindow {
             }
         ));
         performance_group.add(&folder_count_row);
-        page.add(&performance_group);
+        performance_page.add(&performance_group);
 
         // Context menu group
         let context_group = adw::PreferencesGroup::new();
@@ -2254,7 +2278,7 @@ impl WrenWindow {
             }
         ));
         context_group.add(&copy_loc_row);
-        page.add(&context_group);
+        context_page.add(&context_group);
 
         // Window group
         let window_group = adw::PreferencesGroup::new();
@@ -2279,7 +2303,7 @@ impl WrenWindow {
             }
         ));
         window_group.add(&full_path_row);
-        page.add(&window_group);
+        general_page.add(&window_group);
 
         // Files group (display options that affect every view)
         let files_group = adw::PreferencesGroup::new();
@@ -2309,7 +2333,7 @@ impl WrenWindow {
             }
         ));
         files_group.add(&hidden_row);
-        page.add(&files_group);
+        files_page.add(&files_group);
 
         // Trash group
         let trash_group = adw::PreferencesGroup::new();
@@ -2333,7 +2357,7 @@ impl WrenWindow {
             }
         ));
         trash_group.add(&confirm_trash_row);
-        page.add(&trash_group);
+        files_page.add(&trash_group);
 
         // Sorting group
         let sorting_group = adw::PreferencesGroup::new();
@@ -2358,29 +2382,30 @@ impl WrenWindow {
             }
         ));
         sorting_group.add(&folders_first_row);
-        page.add(&sorting_group);
+        general_page.add(&sorting_group);
 
         // New Tab group
-        self.build_new_tab_settings_group(&page);
+        self.build_new_tab_settings_group(&views_page);
 
         // List view columns group
         let columns_group = adw::PreferencesGroup::new();
         columns_group.set_title("List View Columns");
         columns_group.set_description(Some("Choose which columns appear in list view"));
 
-        // (title, getter, setter)
+        // (title, getter, action_name) — toggling routes through the
+        // stateful action so the right-click header menu's checkmark
+        // stays in sync with this SwitchRow.
         type GetFn = fn(&WrenApplication) -> bool;
-        type SetFn = fn(&WrenApplication, bool);
-        let column_rows: &[(&str, GetFn, SetFn)] = &[
-            ("Type",        WrenApplication::show_col_type,        WrenApplication::set_show_col_type),
-            ("Size",        WrenApplication::show_col_size,        WrenApplication::set_show_col_size),
-            ("Modified",    WrenApplication::show_col_modified,    WrenApplication::set_show_col_modified),
-            ("Permissions", WrenApplication::show_col_permissions, WrenApplication::set_show_col_permissions),
-            ("Owner",       WrenApplication::show_col_owner,       WrenApplication::set_show_col_owner),
-            ("Group",       WrenApplication::show_col_group,       WrenApplication::set_show_col_group),
-            ("Accessed",    WrenApplication::show_col_accessed,    WrenApplication::set_show_col_accessed),
+        let column_rows: &[(&str, GetFn, &str)] = &[
+            ("Type",        WrenApplication::show_col_type,        "toggle-col-type"),
+            ("Size",        WrenApplication::show_col_size,        "toggle-col-size"),
+            ("Modified",    WrenApplication::show_col_modified,    "toggle-col-modified"),
+            ("Permissions", WrenApplication::show_col_permissions, "toggle-col-permissions"),
+            ("Owner",       WrenApplication::show_col_owner,       "toggle-col-owner"),
+            ("Group",       WrenApplication::show_col_group,       "toggle-col-group"),
+            ("Accessed",    WrenApplication::show_col_accessed,    "toggle-col-accessed"),
         ];
-        for &(title, getter, setter) in column_rows {
+        for &(title, getter, action_name) in column_rows {
             let row = adw::SwitchRow::new();
             row.set_title(title);
             let initial = self
@@ -2393,15 +2418,19 @@ impl WrenWindow {
                 #[weak(rename_to = window)]
                 self,
                 move |row| {
-                    if let Some(app) = window.application().and_downcast::<WrenApplication>() {
-                        setter(&app, row.is_active());
+                    let current = window
+                        .application()
+                        .and_downcast::<WrenApplication>()
+                        .map(|a| getter(&a))
+                        .unwrap_or(false);
+                    if current != row.is_active() {
+                        WidgetExt::activate_action(&window, action_name, None).ok();
                     }
-                    window.refresh_list_columns();
                 }
             ));
             columns_group.add(&row);
         }
-        page.add(&columns_group);
+        views_page.add(&columns_group);
 
         // Executable text files action — shoehorned into the existing Files
         // group built by the prefs-cluster (which already owns the Show
@@ -2441,7 +2470,7 @@ impl WrenWindow {
             }
         ));
         files_group.add(&exec_text_row);
-        page.add(&files_group);
+        files_page.add(&files_group);
 
         // Sidebar group
         let sidebar_group = adw::PreferencesGroup::new();
@@ -2516,7 +2545,7 @@ impl WrenWindow {
             }
         ));
         sidebar_group.add(&bookmarks_row);
-        page.add(&sidebar_group);
+        sidebar_page.add(&sidebar_group);
 
         // Advanced group
         let advanced_group = adw::PreferencesGroup::new();
@@ -2541,9 +2570,15 @@ impl WrenWindow {
             }
         ));
         advanced_group.add(&log_row);
-        page.add(&advanced_group);
+        advanced_page.add(&advanced_group);
 
-        dialog.add(&page);
+        dialog.add(&general_page);
+        dialog.add(&files_page);
+        dialog.add(&views_page);
+        dialog.add(&sidebar_page);
+        dialog.add(&performance_page);
+        dialog.add(&context_page);
+        dialog.add(&advanced_page);
         dialog.present(Some(self));
     }
 

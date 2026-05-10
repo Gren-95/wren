@@ -711,6 +711,42 @@ mod imp {
             // widgets. Row widget visibility is handled at bind-time.
             self.obj().apply_header_visibility();
 
+            // Right-click on the header bar pops a menu to toggle
+            // column visibility. Stateful actions on the window drive
+            // the checkmarks; they're registered in window/imp.rs.
+            let header_click = gtk4::GestureClick::new();
+            header_click.set_button(gtk4::gdk::BUTTON_SECONDARY);
+            let header_box_weak = header_box.downgrade();
+            header_click.connect_pressed(move |gesture, _n, x, y| {
+                let Some(header_box) = header_box_weak.upgrade() else { return };
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+
+                let menu = gio::Menu::new();
+                let entries: &[(&str, &str)] = &[
+                    ("Type", "win.toggle-col-type"),
+                    ("Size", "win.toggle-col-size"),
+                    ("Modified", "win.toggle-col-modified"),
+                    ("Permissions", "win.toggle-col-permissions"),
+                    ("Owner", "win.toggle-col-owner"),
+                    ("Group", "win.toggle-col-group"),
+                    ("Accessed", "win.toggle-col-accessed"),
+                ];
+                for &(label, action) in entries {
+                    menu.append(Some(label), Some(action));
+                }
+
+                let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+                popover.set_has_arrow(false);
+                popover.set_parent(&header_box);
+                popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+                    x as i32, y as i32, 1, 1,
+                )));
+                popover.connect_closed(|p| p.unparent());
+                popover.popup();
+                crate::file_view::popover::lock_vertical_only(&popover);
+            });
+            header_box.add_controller(header_click);
+
             let scrolled = gtk4::ScrolledWindow::new();
             scrolled.set_child(Some(&self.list_view));
             scrolled.set_vexpand(true);

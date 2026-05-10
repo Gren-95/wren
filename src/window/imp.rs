@@ -491,6 +491,45 @@ impl ObjectImpl for WrenWindow {
         ));
         obj.add_action(&sort_reversed_action);
 
+        // Stateful column-visibility actions. Each drives both the
+        // Settings dialog SwitchRow and the right-click header menu;
+        // its state is the source of truth for the menu checkmark.
+        type GetColFn = fn(&crate::application::WrenApplication) -> bool;
+        type SetColFn = fn(&crate::application::WrenApplication, bool);
+        let col_actions: &[(&str, GetColFn, SetColFn)] = &[
+            ("toggle-col-type",        crate::application::WrenApplication::show_col_type,        crate::application::WrenApplication::set_show_col_type),
+            ("toggle-col-size",        crate::application::WrenApplication::show_col_size,        crate::application::WrenApplication::set_show_col_size),
+            ("toggle-col-modified",    crate::application::WrenApplication::show_col_modified,    crate::application::WrenApplication::set_show_col_modified),
+            ("toggle-col-permissions", crate::application::WrenApplication::show_col_permissions, crate::application::WrenApplication::set_show_col_permissions),
+            ("toggle-col-owner",       crate::application::WrenApplication::show_col_owner,       crate::application::WrenApplication::set_show_col_owner),
+            ("toggle-col-group",       crate::application::WrenApplication::show_col_group,       crate::application::WrenApplication::set_show_col_group),
+            ("toggle-col-accessed",    crate::application::WrenApplication::show_col_accessed,    crate::application::WrenApplication::set_show_col_accessed),
+        ];
+        for &(name, getter, setter) in col_actions {
+            let initial = obj
+                .application()
+                .and_downcast::<crate::application::WrenApplication>()
+                .map(|a| getter(&a))
+                .unwrap_or(false);
+            let action = gio::SimpleAction::new_stateful(name, None, &initial.to_variant());
+            action.connect_activate(glib::clone!(
+                #[weak] obj,
+                move |action, _| {
+                    let current = action.state().and_then(|v| v.get::<bool>()).unwrap_or(false);
+                    let new_val = !current;
+                    action.set_state(&new_val.to_variant());
+                    if let Some(app) = obj
+                        .application()
+                        .and_downcast::<crate::application::WrenApplication>()
+                    {
+                        setter(&app, new_val);
+                    }
+                    obj.refresh_list_columns();
+                }
+            ));
+            obj.add_action(&action);
+        }
+
         // View mode dropdown
         let view_menu = gio::Menu::new();
         let grid_item = gio::MenuItem::new(Some("Grid"), None);
