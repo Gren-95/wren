@@ -292,7 +292,9 @@ impl WrenFileRow {
             async move {
                 let Ok(enumerator) = dir
                     .enumerate_children_future(
-                        gio::FILE_ATTRIBUTE_STANDARD_NAME,
+                        // Need is-hidden to honour show_hidden; name only would
+                        // trip g_file_info_get_is_hidden's missing-attr critical.
+                        "standard::name,standard::is-hidden",
                         gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
                         glib::Priority::LOW,
                     )
