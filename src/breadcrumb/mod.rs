@@ -281,7 +281,7 @@ impl WrenBreadcrumbBar {
 
 // True for strings like "file://x", "trash:///", "recent:///", "smb://...".
 // Excludes Windows-style drive letters by requiring at least 2 leading chars.
-fn has_uri_scheme(text: &str) -> bool {
+pub(crate) fn has_uri_scheme(text: &str) -> bool {
     let Some(idx) = text.find(':') else { return false };
     if idx < 2 {
         return false;

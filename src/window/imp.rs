@@ -157,6 +157,10 @@ impl ObjectSubclass for WrenWindow {
             crate::wren_log!("action: {action_name}");
             win.focus_location();
         });
+        klass.install_action("win.open-location", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
+            win.open_location();
+        });
         klass.install_action("win.open-selection", None, |win, action_name, _| {
             crate::wren_log!("action: {action_name}");
             win.open_selection();
