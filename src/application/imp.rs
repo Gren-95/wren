@@ -24,6 +24,7 @@ pub struct WrenApplication {
     pub color_scheme: RefCell<String>,
     pub animations_enabled: Cell<bool>,
     pub debug_logging: Cell<bool>,
+    pub notifications_enabled: Cell<bool>,
     pub recent_uris: RefCell<Vec<String>>,
 }
 
@@ -47,6 +48,7 @@ impl Default for WrenApplication {
             color_scheme: RefCell::new("default".to_string()),
             animations_enabled: Cell::new(true),
             debug_logging: Cell::new(false),
+            notifications_enabled: Cell::new(false),
             recent_uris: RefCell::new(Vec::new()),
         }
     }
@@ -124,6 +126,9 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("General", "debug_logging") {
                 self.debug_logging.set(v);
             }
+            if let Ok(v) = kf.boolean("Notifications", "enabled") {
+                self.notifications_enabled.set(v);
+            }
             if let Ok(v) = kf.string("Appearance", "color_scheme") {
                 let s = v.to_string();
                 if matches!(s.as_str(), "default" | "light" | "dark") {
@@ -172,6 +177,7 @@ impl WrenApplication {
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         kf.set_boolean("General", "debug_logging", self.debug_logging.get());
+        kf.set_boolean("Notifications", "enabled", self.notifications_enabled.get());
         kf.set_string("Recents", "uris", &self.recent_uris.borrow().join("\t"));
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
@@ -231,6 +237,24 @@ impl ApplicationImpl for WrenApplication {
         self.load_settings();
         crate::logging::set_enabled(self.debug_logging.get());
         let app = self.obj();
+
+        // app.focus-window — invoked from the "Show" button on desktop
+        // notifications. Walks the application's windows and presents the
+        // first WrenWindow it finds, raising it above other windows.
+        let focus_action = gio::SimpleAction::new("focus-window", None);
+        focus_action.connect_activate(glib::clone!(
+            #[weak]
+            app,
+            move |_, _| {
+                for win in app.windows() {
+                    if let Some(wren_win) = win.downcast_ref::<WrenWindow>() {
+                        wren_win.present();
+                        return;
+                    }
+                }
+            }
+        ));
+        app.add_action(&focus_action);
 
         let scheme = match self.color_scheme.borrow().as_str() {
             "light" => adw::ColorScheme::ForceLight,

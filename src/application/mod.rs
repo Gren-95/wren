@@ -107,6 +107,12 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn notifications_enabled(&self) -> bool { self.imp().notifications_enabled.get() }
+    pub fn set_notifications_enabled(&self, v: bool) {
+        self.imp().notifications_enabled.set(v);
+        self.imp().save_settings();
+    }
+
     pub fn recent_uris(&self) -> Vec<String> {
         self.imp().recent_uris.borrow().clone()
     }
