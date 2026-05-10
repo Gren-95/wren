@@ -124,7 +124,7 @@ impl WrenWindow {
             #[weak(rename_to = window)]
             self,
             move |file_obj| {
-                if file_obj.is_directory() {
+                if file_obj.is_navigable() {
                     window.navigate_to(window.target_for_activation(file_obj));
                 } else {
                     window.activate_file_object(file_obj);
@@ -135,7 +135,7 @@ impl WrenWindow {
             #[weak(rename_to = window)]
             self,
             move |file_obj| {
-                if file_obj.is_directory() {
+                if file_obj.is_navigable() {
                     window.navigate_to(window.target_for_activation(file_obj));
                 } else {
                     window.activate_file_object(file_obj);
@@ -149,7 +149,7 @@ impl WrenWindow {
         let new_tab_handler = glib::clone!(
             #[weak(rename_to = window)] self,
             move |obj: &FileObject| {
-                if obj.is_directory() {
+                if obj.is_navigable() {
                     window.add_tab(window.target_for_activation(obj));
                 } else {
                     window.activate_file_object(obj);
@@ -2076,7 +2076,7 @@ impl WrenWindow {
 
     pub fn open_selection(&self) {
         for obj in self.selected_file_objects() {
-            if obj.is_directory() {
+            if obj.is_navigable() {
                 self.navigate_to(self.target_for_activation(&obj));
                 return;
             }

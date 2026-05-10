@@ -106,6 +106,21 @@ impl FileObject {
         self.file_info().is_symlink()
     }
 
+    /// True when activating the entry should *navigate into it* rather
+    /// than launching a default app. Covers regular directories AND
+    /// gio shortcut / mountable types — the latter cover entries in
+    /// `network:///` (SMB / NFS / WebDAV shares listed by avahi),
+    /// gio device URIs, etc. Without this, activating an SMB share
+    /// in Browse Network falls through to gtk4::FileLauncher and the
+    /// system's default file handler — usually Nautilus — opens it.
+    pub fn is_navigable(&self) -> bool {
+        let ft = self.file_info().file_type();
+        matches!(
+            ft,
+            gio::FileType::Directory | gio::FileType::Shortcut | gio::FileType::Mountable
+        )
+    }
+
     /// True when the current user has read access. Driven by
     /// `access::can-read` (queried via QUERY_ATTRS). When the
     /// attribute is missing we conservatively assume readable so
