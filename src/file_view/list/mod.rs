@@ -497,6 +497,36 @@ impl WrenFileList {
             }
         }
     }
+
+    /// Sync the column header buttons / labels to the current
+    /// app-level prefs. Called once at construction and again
+    /// whenever the user toggles a column in Settings.
+    pub fn apply_header_visibility(&self) {
+        let imp = imp::WrenFileList::from_obj(self);
+        let cols = crate::file_view::row::ColumnVisibility::from_application();
+        imp.header_type.set_visible(cols.content_type);
+        imp.header_size.set_visible(cols.size);
+        imp.header_modified.set_visible(cols.modified);
+        imp.header_permissions.set_visible(cols.permissions);
+        imp.header_owner.set_visible(cols.owner);
+        imp.header_group.set_visible(cols.group);
+        imp.header_accessed.set_visible(cols.accessed);
+    }
+
+    /// Force every visible row to rebind so it picks up the latest
+    /// column-visibility prefs. Replaces the factory — same trick
+    /// used by zoom/extensions changes.
+    pub fn refresh_columns(&self) {
+        let imp = imp::WrenFileList::from_obj(self);
+        self.apply_header_visibility();
+        imp.list_view.set_factory(Some(&make_row_factory(
+            Rc::clone(&imp.icon_size),
+            Rc::clone(&imp.cut_uris),
+            imp.show_extensions.get(),
+            Rc::clone(&imp.show_hidden),
+            Rc::clone(&imp.bound_rows),
+        )));
+    }
 }
 
 mod imp {
@@ -514,6 +544,15 @@ mod imp {
         pub context_menu_builder: RefCell<Option<Box<dyn Fn() -> gio::MenuModel>>>,
         pub context_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub typeahead: Rc<TypeaheadState>,
+        // Header widgets for toggleable columns. Indexed by column key:
+        //   type, size, date, permissions, owner, group, accessed
+        pub header_type: gtk4::Button,
+        pub header_size: gtk4::Button,
+        pub header_modified: gtk4::Button,
+        pub header_permissions: gtk4::Label,
+        pub header_owner: gtk4::Label,
+        pub header_group: gtk4::Label,
+        pub header_accessed: gtk4::Label,
     }
 
     impl Default for WrenFileList {
@@ -530,6 +569,13 @@ mod imp {
                 context_menu_builder: RefCell::new(None),
                 context_popover: RefCell::new(None),
                 typeahead: Rc::new(TypeaheadState::default()),
+                header_type: gtk4::Button::new(),
+                header_size: gtk4::Button::new(),
+                header_modified: gtk4::Button::new(),
+                header_permissions: gtk4::Label::new(None),
+                header_owner: gtk4::Label::new(None),
+                header_group: gtk4::Label::new(None),
+                header_accessed: gtk4::Label::new(None),
             }
         }
     }
@@ -603,39 +649,67 @@ mod imp {
             self.header_icon_spacer.set_size_request(32, -1);
             header_box.append(&self.header_icon_spacer);
 
-            // (label, sort_key, hexpand, width_request, right_align)
-            let cols: &[(&str, &str, bool, i32, bool)] = &[
-                ("Name",     "name", true,  -1,  false),
-                ("Type",     "type", false, 120, true),
-                ("Size",     "size", false, 80,  true),
-                ("Modified", "date", false, 120, true),
-            ];
+            // Name column (always visible, sortable, hexpand).
+            let name_btn = gtk4::Button::with_label("Name");
+            name_btn.add_css_class("flat");
+            name_btn.set_hexpand(true);
+            name_btn.connect_clicked(|btn| {
+                let _ = btn.activate_action(
+                    "win.set-sort-key",
+                    Some(&"name".to_variant()),
+                );
+            });
+            header_box.append(&name_btn);
 
+            // Sortable toggleable headers (Type, Size, Modified).
             let mut sort_buttons = self.sort_buttons.borrow_mut();
-            for &(label, key, expand, width, right_align) in cols {
-                let btn = gtk4::Button::with_label(label);
+            sort_buttons.push(name_btn);
+
+            let setup_sort_btn = |btn: &gtk4::Button, label: &str, key: &'static str, width: i32| {
+                btn.set_label(label);
                 btn.add_css_class("flat");
-                if expand {
-                    btn.set_hexpand(true);
-                } else {
-                    btn.set_width_request(width);
+                btn.set_width_request(width);
+                if let Some(lbl) = btn.child().and_downcast::<gtk4::Label>() {
+                    lbl.set_xalign(1.0);
                 }
-                if right_align {
-                    if let Some(lbl) = btn.child().and_downcast::<gtk4::Label>() {
-                        lbl.set_xalign(1.0);
-                    }
-                }
-                let key = key.to_string();
                 btn.connect_clicked(move |btn| {
                     let _ = btn.activate_action(
                         "win.set-sort-key",
                         Some(&key.to_variant()),
                     );
                 });
-                header_box.append(&btn);
-                sort_buttons.push(btn);
-            }
+            };
+            setup_sort_btn(&self.header_type, "Type", "type", 120);
+            setup_sort_btn(&self.header_size, "Size", "size", 80);
+            setup_sort_btn(&self.header_modified, "Modified", "date", 120);
+            header_box.append(&self.header_type);
+            header_box.append(&self.header_size);
+            header_box.append(&self.header_modified);
+            sort_buttons.push(self.header_type.clone());
+            sort_buttons.push(self.header_size.clone());
+            sort_buttons.push(self.header_modified.clone());
             drop(sort_buttons);
+
+            // Non-sortable optional headers (Permissions / Owner / Group / Accessed).
+            let setup_label_hdr = |lbl: &gtk4::Label, text: &str, width: i32| {
+                lbl.set_label(text);
+                lbl.set_width_request(width);
+                lbl.set_xalign(1.0);
+                lbl.add_css_class("dim-label");
+                lbl.set_visible(false);
+            };
+            setup_label_hdr(&self.header_permissions, "Permissions", 100);
+            setup_label_hdr(&self.header_owner, "Owner", 100);
+            setup_label_hdr(&self.header_group, "Group", 100);
+            setup_label_hdr(&self.header_accessed, "Accessed", 120);
+            header_box.append(&self.header_permissions);
+            header_box.append(&self.header_owner);
+            header_box.append(&self.header_group);
+            header_box.append(&self.header_accessed);
+
+            // Apply the persisted column-visibility prefs to header
+            // widgets. Row widget visibility is handled at bind-time.
+            self.obj().apply_header_visibility();
 
             let scrolled = gtk4::ScrolledWindow::new();
             scrolled.set_child(Some(&self.list_view));

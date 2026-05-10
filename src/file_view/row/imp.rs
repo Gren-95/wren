@@ -20,6 +20,14 @@ pub struct WrenFileRow {
     pub size: TemplateChild<gtk4::Label>,
     #[template_child]
     pub modified: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub permissions: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub owner: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub group: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub accessed: TemplateChild<gtk4::Label>,
 
     pub icon_size: std::cell::Cell<u32>,
     pub bound_file: std::cell::RefCell<Option<crate::model::FileObject>>,

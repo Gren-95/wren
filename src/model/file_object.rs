@@ -42,8 +42,9 @@ impl FileObject {
     pub const QUERY_ATTRS: &'static str =
         "standard::name,standard::display-name,standard::type,standard::icon,\
          standard::content-type,standard::size,standard::is-hidden,\
-         standard::is-symlink,time::modified,access::can-delete,\
-         access::can-rename,access::can-read,thumbnail::path";
+         standard::is-symlink,time::modified,time::access,access::can-delete,\
+         access::can-rename,access::can-read,thumbnail::path,\
+         unix::mode,owner::user,owner::group";
 
     pub fn new(file: gio::File, info: gio::FileInfo) -> Self {
         let name = info.display_name().to_string();
@@ -117,5 +118,39 @@ impl FileObject {
         } else {
             true
         }
+    }
+
+    /// Unix file mode (permission bits + type), if exposed by the backend.
+    /// Local filesystems return this; remote/virtual ones (mtp://, smb://,
+    /// trash://, …) usually don't.
+    pub fn unix_mode(&self) -> Option<u32> {
+        let info = self.file_info();
+        if info.has_attribute(gio::FILE_ATTRIBUTE_UNIX_MODE) {
+            Some(info.attribute_uint32(gio::FILE_ATTRIBUTE_UNIX_MODE))
+        } else {
+            None
+        }
+    }
+
+    /// Owning user (string form). None on backends that don't report it.
+    pub fn owner_user(&self) -> Option<String> {
+        self.file_info()
+            .attribute_string(gio::FILE_ATTRIBUTE_OWNER_USER)
+            .map(|s| s.to_string())
+    }
+
+    /// Owning group (string form). None on backends that don't report it.
+    pub fn owner_group(&self) -> Option<String> {
+        self.file_info()
+            .attribute_string(gio::FILE_ATTRIBUTE_OWNER_GROUP)
+            .map(|s| s.to_string())
+    }
+
+    /// Last-access unix timestamp; 0 if unavailable.
+    pub fn accessed(&self) -> i64 {
+        self.file_info()
+            .access_date_time()
+            .map(|dt| dt.to_unix())
+            .unwrap_or(0)
     }
 }

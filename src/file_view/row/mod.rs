@@ -5,9 +5,51 @@ use std::collections::VecDeque;
 
 use adw::subclass::prelude::*;
 use glib::Object;
+use gio::prelude::*;
 use gtk4::prelude::*;
 
+use crate::application::WrenApplication;
 use crate::model::FileObject;
+
+/// Visibility for each toggleable list-view column. Snapshot taken
+/// at bind time so each row reflects the current preferences.
+#[derive(Clone, Copy, Debug)]
+pub struct ColumnVisibility {
+    pub content_type: bool,
+    pub size: bool,
+    pub modified: bool,
+    pub permissions: bool,
+    pub owner: bool,
+    pub group: bool,
+    pub accessed: bool,
+}
+
+impl ColumnVisibility {
+    pub fn from_application() -> Self {
+        let app = gio::Application::default().and_downcast::<WrenApplication>();
+        if let Some(app) = app {
+            Self {
+                content_type: app.show_col_type(),
+                size: app.show_col_size(),
+                modified: app.show_col_modified(),
+                permissions: app.show_col_permissions(),
+                owner: app.show_col_owner(),
+                group: app.show_col_group(),
+                accessed: app.show_col_accessed(),
+            }
+        } else {
+            Self {
+                content_type: true,
+                size: true,
+                modified: true,
+                permissions: false,
+                owner: false,
+                group: false,
+                accessed: false,
+            }
+        }
+    }
+}
 
 glib::wrapper! {
     pub struct WrenFileRow(ObjectSubclass<imp::WrenFileRow>)
@@ -129,6 +171,8 @@ impl WrenFileRow {
         };
         imp.name.set_label(&display_name);
 
+        let cols = ColumnVisibility::from_application();
+
         if file_obj.is_directory() {
             imp.content_type.set_label("Folder");
             self.bind_folder_count(file_obj, show_hidden);
@@ -140,11 +184,50 @@ impl WrenFileRow {
             imp.content_type.set_label(&file_obj.content_type());
             imp.size.set_label(&format_size(file_obj.file_size()));
         }
+        imp.content_type.set_visible(cols.content_type);
+        imp.size.set_visible(cols.size);
 
         let ts = file_obj.modified();
         if ts > 0 {
             imp.modified.set_label(&format_modified(ts));
+        } else {
+            imp.modified.set_label("");
         }
+        imp.modified.set_visible(cols.modified);
+
+        // Optional columns. Display "—" when the backend doesn't expose
+        // the underlying attribute (typical for trash://, smb://, mtp://).
+        if cols.permissions {
+            let label = file_obj
+                .unix_mode()
+                .map(format_permissions)
+                .unwrap_or_else(|| "—".to_string());
+            imp.permissions.set_label(&label);
+        }
+        imp.permissions.set_visible(cols.permissions);
+
+        if cols.owner {
+            imp.owner
+                .set_label(&file_obj.owner_user().unwrap_or_else(|| "—".to_string()));
+        }
+        imp.owner.set_visible(cols.owner);
+
+        if cols.group {
+            imp.group
+                .set_label(&file_obj.owner_group().unwrap_or_else(|| "—".to_string()));
+        }
+        imp.group.set_visible(cols.group);
+
+        if cols.accessed {
+            let at = file_obj.accessed();
+            let label = if at > 0 {
+                format_modified(at)
+            } else {
+                "—".to_string()
+            };
+            imp.accessed.set_label(&label);
+        }
+        imp.accessed.set_visible(cols.accessed);
 
         if let Some(icon) = file_obj.icon() {
             imp.icon.set_from_gicon(&icon);
@@ -274,6 +357,10 @@ impl WrenFileRow {
         imp.content_type.set_label("");
         imp.size.set_label("");
         imp.modified.set_label("");
+        imp.permissions.set_label("");
+        imp.owner.set_label("");
+        imp.group.set_label("");
+        imp.accessed.set_label("");
         imp.icon.set_pixel_size(24);
         imp.icon.clear();
     }
@@ -285,6 +372,31 @@ fn row_still_bound_to(row: &WrenFileRow, uri: &str) -> bool {
         .borrow()
         .as_deref()
         .map_or(false, |u| u == uri)
+}
+
+/// Format a unix mode (permission bits + type) as `rwxr-xr-x`.
+/// Special bits (setuid, setgid, sticky) are folded into the
+/// corresponding execute slot using the standard `s`/`S`/`t`/`T` letters.
+fn format_permissions(mode: u32) -> String {
+    let mut out = String::with_capacity(9);
+
+    let bit = |b: u32| -> bool { mode & b != 0 };
+
+    let triplet = |out: &mut String, r: u32, w: u32, x: u32, sp: u32, sp_lc: char, sp_uc: char| {
+        out.push(if bit(r) { 'r' } else { '-' });
+        out.push(if bit(w) { 'w' } else { '-' });
+        out.push(match (bit(x), bit(sp)) {
+            (true, true) => sp_lc,
+            (false, true) => sp_uc,
+            (true, false) => 'x',
+            (false, false) => '-',
+        });
+    };
+
+    triplet(&mut out, 0o400, 0o200, 0o100, 0o4000, 's', 'S');
+    triplet(&mut out, 0o040, 0o020, 0o010, 0o2000, 's', 'S');
+    triplet(&mut out, 0o004, 0o002, 0o001, 0o1000, 't', 'T');
+    out
 }
 
 fn strip_extension_name(name: &str) -> String {

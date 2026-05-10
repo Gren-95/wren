@@ -343,6 +343,48 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn show_col_type(&self) -> bool { self.imp().show_col_type.get() }
+    pub fn set_show_col_type(&self, v: bool) {
+        self.imp().show_col_type.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_col_size(&self) -> bool { self.imp().show_col_size.get() }
+    pub fn set_show_col_size(&self, v: bool) {
+        self.imp().show_col_size.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_col_modified(&self) -> bool { self.imp().show_col_modified.get() }
+    pub fn set_show_col_modified(&self, v: bool) {
+        self.imp().show_col_modified.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_col_permissions(&self) -> bool { self.imp().show_col_permissions.get() }
+    pub fn set_show_col_permissions(&self, v: bool) {
+        self.imp().show_col_permissions.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_col_owner(&self) -> bool { self.imp().show_col_owner.get() }
+    pub fn set_show_col_owner(&self, v: bool) {
+        self.imp().show_col_owner.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_col_group(&self) -> bool { self.imp().show_col_group.get() }
+    pub fn set_show_col_group(&self, v: bool) {
+        self.imp().show_col_group.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_col_accessed(&self) -> bool { self.imp().show_col_accessed.get() }
+    pub fn set_show_col_accessed(&self, v: bool) {
+        self.imp().show_col_accessed.set(v);
+        self.imp().save_settings();
+    }
+
     /// Push `uri` to the front of the recents list (MRU), deduplicating any
     /// prior occurrence and capping at `RECENTS_MAX`. Returns true when the
     /// list changed (caller may want to refresh the sidebar).

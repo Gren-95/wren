@@ -46,6 +46,13 @@ pub struct WrenApplication {
     pub new_tab_default_sort_key: RefCell<String>,
     pub new_tab_default_sort_reversed: Cell<bool>,
     pub new_tab_default_zoom: Cell<i32>,
+    pub show_col_type: Cell<bool>,
+    pub show_col_size: Cell<bool>,
+    pub show_col_modified: Cell<bool>,
+    pub show_col_permissions: Cell<bool>,
+    pub show_col_owner: Cell<bool>,
+    pub show_col_group: Cell<bool>,
+    pub show_col_accessed: Cell<bool>,
 }
 
 impl Default for WrenApplication {
@@ -88,6 +95,13 @@ impl Default for WrenApplication {
             new_tab_default_sort_key: RefCell::new("name".to_string()),
             new_tab_default_sort_reversed: Cell::new(false),
             new_tab_default_zoom: Cell::new(3),
+            show_col_type: Cell::new(true),
+            show_col_size: Cell::new(true),
+            show_col_modified: Cell::new(true),
+            show_col_permissions: Cell::new(false),
+            show_col_owner: Cell::new(false),
+            show_col_group: Cell::new(false),
+            show_col_accessed: Cell::new(false),
         }
     }
 }
@@ -268,6 +282,27 @@ impl WrenApplication {
             if let Ok(v) = kf.integer("NewTab", "default_zoom") {
                 self.new_tab_default_zoom.set(v.clamp(1, 5));
             }
+            if let Ok(v) = kf.boolean("ListColumns", "type") {
+                self.show_col_type.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "size") {
+                self.show_col_size.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "modified") {
+                self.show_col_modified.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "permissions") {
+                self.show_col_permissions.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "owner") {
+                self.show_col_owner.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "group") {
+                self.show_col_group.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "accessed") {
+                self.show_col_accessed.set(v);
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -350,6 +385,13 @@ impl WrenApplication {
             self.new_tab_default_sort_reversed.get(),
         );
         kf.set_integer("NewTab", "default_zoom", self.new_tab_default_zoom.get());
+        kf.set_boolean("ListColumns", "type", self.show_col_type.get());
+        kf.set_boolean("ListColumns", "size", self.show_col_size.get());
+        kf.set_boolean("ListColumns", "modified", self.show_col_modified.get());
+        kf.set_boolean("ListColumns", "permissions", self.show_col_permissions.get());
+        kf.set_boolean("ListColumns", "owner", self.show_col_owner.get());
+        kf.set_boolean("ListColumns", "group", self.show_col_group.get());
+        kf.set_boolean("ListColumns", "accessed", self.show_col_accessed.get());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

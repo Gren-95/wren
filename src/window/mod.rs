@@ -968,6 +968,16 @@ impl WrenWindow {
         }
     }
 
+    /// Push the current column-visibility prefs to every open tab's
+    /// list view. The view replaces its row factory so visible rows
+    /// rebind and pick up the new visibility flags.
+    pub fn refresh_list_columns(&self) {
+        let tabs = self.imp().tabs.borrow();
+        for tab in tabs.iter() {
+            tab.file_list.refresh_columns();
+        }
+    }
+
     pub fn apply_hidden_filter(&self) {
         let imp = self.imp();
         let show_hidden = imp.show_hidden.get();
@@ -2282,6 +2292,46 @@ impl WrenWindow {
 
         // New Tab group
         self.build_new_tab_settings_group(&page);
+
+        // List view columns group
+        let columns_group = adw::PreferencesGroup::new();
+        columns_group.set_title("List View Columns");
+        columns_group.set_description(Some("Choose which columns appear in list view"));
+
+        // (title, getter, setter)
+        type GetFn = fn(&WrenApplication) -> bool;
+        type SetFn = fn(&WrenApplication, bool);
+        let column_rows: &[(&str, GetFn, SetFn)] = &[
+            ("Type",        WrenApplication::show_col_type,        WrenApplication::set_show_col_type),
+            ("Size",        WrenApplication::show_col_size,        WrenApplication::set_show_col_size),
+            ("Modified",    WrenApplication::show_col_modified,    WrenApplication::set_show_col_modified),
+            ("Permissions", WrenApplication::show_col_permissions, WrenApplication::set_show_col_permissions),
+            ("Owner",       WrenApplication::show_col_owner,       WrenApplication::set_show_col_owner),
+            ("Group",       WrenApplication::show_col_group,       WrenApplication::set_show_col_group),
+            ("Accessed",    WrenApplication::show_col_accessed,    WrenApplication::set_show_col_accessed),
+        ];
+        for &(title, getter, setter) in column_rows {
+            let row = adw::SwitchRow::new();
+            row.set_title(title);
+            let initial = self
+                .application()
+                .and_downcast::<WrenApplication>()
+                .map(|a| getter(&a))
+                .unwrap_or(false);
+            row.set_active(initial);
+            row.connect_active_notify(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |row| {
+                    if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                        setter(&app, row.is_active());
+                    }
+                    window.refresh_list_columns();
+                }
+            ));
+            columns_group.add(&row);
+        }
+        page.add(&columns_group);
 
         // Sidebar group
         let sidebar_group = adw::PreferencesGroup::new();
