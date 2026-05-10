@@ -30,8 +30,11 @@ impl WrenSidebar {
         let imp = self.imp();
         let list = &imp.list_box;
 
-        // No persistent selection highlight — rows are activated, not selected.
-        list.set_selection_mode(gtk4::SelectionMode::None);
+        // libadwaita's standard sidebar look: pill-shaped rows, soft
+        // selection accent, dim header rows. Same class Nautilus and
+        // every other GNOME-pattern app uses for their place list.
+        list.add_css_class("navigation-sidebar");
+        list.set_selection_mode(gtk4::SelectionMode::Single);
 
         let mut uris: Vec<String> = Vec::new();
 
@@ -728,17 +731,14 @@ impl WrenSidebar {
         self.reload_volumes();
     }
 
-    /// Highlight the row whose URI matches `file`, removing the highlight
-    /// from every other row. Picks an exact `gio::File::equal` match if
-    /// one exists, otherwise the deepest ancestor by prefix. The list box
-    /// uses SelectionMode::None (so click-to-deselect noise stays out of
-    /// the way), so we drive the cue via a `.wren-active-place` CSS class.
+    /// Highlight the row whose URI matches `file` via the standard
+    /// `:selected` pseudo (libadwaita's navigation-sidebar styling).
+    /// Picks an exact `gio::File::equal` match if one exists, otherwise
+    /// the deepest ancestor by prefix.
     pub fn set_location(&self, file: &gio::File) {
         let imp = self.imp();
         let uris = imp.place_uris.borrow();
 
-        // Score each non-empty entry: 2 for an exact match, 1 + path-len
-        // for a prefix match, 0 otherwise. Pick the highest-scoring index.
         let mut best: Option<(usize, usize)> = None;
         for (i, uri) in uris.iter().enumerate() {
             if uri.is_empty() {
@@ -758,15 +758,13 @@ impl WrenSidebar {
             }
         }
 
-        let target_idx = best.map(|(i, _)| i as i32);
-        let mut idx = 0;
-        while let Some(row) = imp.list_box.row_at_index(idx) {
-            if Some(idx) == target_idx {
-                row.add_css_class("wren-active-place");
-            } else {
-                row.remove_css_class("wren-active-place");
+        match best {
+            Some((idx, _)) => {
+                if let Some(row) = imp.list_box.row_at_index(idx as i32) {
+                    imp.list_box.select_row(Some(&row));
+                }
             }
-            idx += 1;
+            None => imp.list_box.unselect_all(),
         }
     }
 
@@ -845,10 +843,11 @@ impl WrenSidebar {
         let row = gtk4::ListBoxRow::new();
         row.set_activatable(false);
         row.set_selectable(false);
-        row.add_css_class("wren-section-header");
 
         let lbl = gtk4::Label::new(Some(title));
         lbl.set_xalign(0.0);
+        lbl.set_margin_top(12);
+        lbl.set_margin_bottom(2);
         lbl.set_margin_start(8);
         lbl.set_margin_end(8);
         lbl.add_css_class("heading");
