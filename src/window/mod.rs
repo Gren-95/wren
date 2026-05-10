@@ -512,6 +512,76 @@ impl WrenWindow {
     }
 
     fn load_location_for_tab(&self, tab_idx: usize, location: gio::File) {
+        // For remote URIs (smb://, sftp://, dav://, ftp://, network://),
+        // proactively mount the enclosing volume BEFORE attempting to
+        // enumerate. This is what Nautilus does and is the only path
+        // that reliably surfaces gtk4::MountOperation's credential
+        // dialog: on the first access GVFS may return any of FAILED /
+        // NOT_MOUNTED / NOT_DIRECTORY depending on backend, and only
+        // mount_enclosing_volume_future drives the ask-password signal.
+        // For already-mounted shares the call is cheap and returns
+        // AlreadyMounted, which we treat as success.
+        let scheme = location.uri_scheme().map(|s| s.to_string()).unwrap_or_default();
+        let is_remote = !matches!(scheme.as_str(), "" | "file" | "trash" | "recent");
+        let already_retried = {
+            let tabs = self.imp().tabs.borrow();
+            tabs.get(tab_idx)
+                .map(|t| t.mount_retry_in_flight.get())
+                .unwrap_or(false)
+        };
+        if is_remote && !already_retried {
+            {
+                let tabs = self.imp().tabs.borrow();
+                if let Some(tab) = tabs.get(tab_idx) {
+                    tab.mount_retry_in_flight.set(true);
+                }
+            }
+            let parent_window: gtk4::Window = self.upcast_ref::<gtk4::Window>().clone();
+            let op = gtk4::MountOperation::new(Some(&parent_window));
+            let op_g: gio::MountOperation = op.upcast();
+            let location_for_mount = location.clone();
+            glib::spawn_future_local(glib::clone!(
+                #[weak(rename_to = window)] self,
+                async move {
+                    let result = location_for_mount
+                        .mount_enclosing_volume_future(
+                            gio::MountMountFlags::NONE,
+                            Some(&op_g),
+                        )
+                        .await;
+                    let already_mounted = matches!(
+                        &result,
+                        Err(err) if err.matches(gio::IOErrorEnum::AlreadyMounted)
+                    );
+                    if result.is_ok() || already_mounted {
+                        // Now that the mount is established, fall
+                        // through to the regular enumerate path.
+                        // mount_retry_in_flight stays true so the
+                        // post-mount load won't recurse here; the
+                        // success branch of that load clears it.
+                        window.do_load_location(tab_idx, location_for_mount);
+                        return;
+                    }
+                    {
+                        let tabs = window.imp().tabs.borrow();
+                        if let Some(tab) = tabs.get(tab_idx) {
+                            tab.mount_retry_in_flight.set(false);
+                        }
+                    }
+                    let err = result.unwrap_err();
+                    if !err.matches(gio::IOErrorEnum::FailedHandled) {
+                        window.show_toast(&format!("Could not mount: {}", err.message()));
+                    }
+                    window.navigate_back();
+                }
+            ));
+            return;
+        }
+
+        self.do_load_location(tab_idx, location);
+    }
+
+    fn do_load_location(&self, tab_idx: usize, location: gio::File) {
         let imp = self.imp();
 
         imp.breadcrumb_bar.set_location(&location);
@@ -750,7 +820,11 @@ impl WrenWindow {
                                         Err(err) if err.matches(gio::IOErrorEnum::AlreadyMounted)
                                     );
                                     if result.is_ok() || already_mounted {
-                                        window.load_location_for_tab(tab_idx, location_for_mount);
+                                        // mount_retry_in_flight stays true so
+                                        // the up-front mount path skips itself
+                                        // on this re-entry; do_load_location
+                                        // clears it on success.
+                                        window.do_load_location(tab_idx, location_for_mount);
                                         return;
                                     }
                                     {
