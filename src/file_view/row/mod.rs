@@ -1,5 +1,8 @@
 mod imp;
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
 use adw::subclass::prelude::*;
 use glib::Object;
 use gtk4::prelude::*;
@@ -18,6 +21,88 @@ impl Default for WrenFileRow {
     }
 }
 
+// ── Folder item-count cache ──────────────────────────────────────────────────
+//
+// GtkListView aggressively rebinds rows on scroll. A naive implementation would
+// re-enumerate every directory on every rebind, so we cache the result keyed
+// by URI + show_hidden (the count differs between hidden-on / hidden-off, and
+// we'd otherwise bake stale numbers in when the user toggles).
+//
+// VecDeque eviction (oldest first) bounded at FOLDER_COUNT_CACHE_MAX. The cap
+// is well above a typical viewport so users don't churn cache entries while
+// scrolling within a single directory.
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum FolderCountPolicy {
+    Always,
+    Local,
+    Never,
+}
+
+const FOLDER_COUNT_CACHE_MAX: usize = 500;
+
+thread_local! {
+    static FOLDER_COUNT_CACHE: RefCell<VecDeque<(String, bool, u32)>> =
+        RefCell::new(VecDeque::new());
+
+    static FOLDER_COUNT_POLICY: std::cell::Cell<FolderCountPolicy> =
+        std::cell::Cell::new(FolderCountPolicy::Always);
+}
+
+pub fn set_folder_count_policy(v: &str) {
+    let p = match v {
+        "never" => FolderCountPolicy::Never,
+        "local" => FolderCountPolicy::Local,
+        _ => FolderCountPolicy::Always,
+    };
+    FOLDER_COUNT_POLICY.with(|c| c.set(p));
+}
+
+fn current_policy() -> FolderCountPolicy {
+    FOLDER_COUNT_POLICY.with(|c| c.get())
+}
+
+/// Drop every cached folder count. Called from `WrenWindow::reload()` so that
+/// changes made to a folder's contents (or the show_hidden toggle) are picked
+/// up on the next bind.
+pub fn clear_folder_count_cache() {
+    FOLDER_COUNT_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+fn cache_lookup(uri: &str, show_hidden: bool) -> Option<u32> {
+    FOLDER_COUNT_CACHE.with(|c| {
+        c.borrow()
+            .iter()
+            .find(|(u, h, _)| u == uri && *h == show_hidden)
+            .map(|(_, _, n)| *n)
+    })
+}
+
+fn cache_store(uri: String, show_hidden: bool, count: u32) {
+    FOLDER_COUNT_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        // Replace any existing entry first so we don't grow the deque
+        // when a refresh recomputes a previously-cached folder.
+        if let Some(pos) = c.iter().position(|(u, h, _)| u == &uri && *h == show_hidden) {
+            c.remove(pos);
+        }
+        if c.len() >= FOLDER_COUNT_CACHE_MAX {
+            // Drop the oldest 64 to amortise the eviction cost.
+            let drop_n = (FOLDER_COUNT_CACHE_MAX / 8).max(1);
+            c.drain(..drop_n);
+        }
+        c.push_back((uri, show_hidden, count));
+    });
+}
+
+fn format_item_count(n: u32) -> String {
+    match n {
+        0 => "Empty".to_string(),
+        1 => "1 item".to_string(),
+        n => format!("{n} items"),
+    }
+}
+
 impl WrenFileRow {
     pub fn new() -> Self {
         Object::builder().build()
@@ -31,7 +116,7 @@ impl WrenFileRow {
         self.imp().bound_file.borrow().clone()
     }
 
-    pub fn bind(&self, file_obj: &FileObject, icon_size: u32, show_extension: bool) {
+    pub fn bind(&self, file_obj: &FileObject, icon_size: u32, show_extension: bool, show_hidden: bool) {
         let imp = self.imp();
         *imp.bound_file.borrow_mut() = Some(file_obj.clone());
         imp.icon_size.set(icon_size);
@@ -46,8 +131,12 @@ impl WrenFileRow {
 
         if file_obj.is_directory() {
             imp.content_type.set_label("Folder");
-            imp.size.set_label("—");
+            self.bind_folder_count(file_obj, show_hidden);
         } else {
+            // Clear any pending-count stamp so an in-flight future from a
+            // previously-bound directory bails on completion instead of
+            // stomping on this file's size label.
+            *imp.pending_count_uri.borrow_mut() = None;
             imp.content_type.set_label(&file_obj.content_type());
             imp.size.set_label(&format_size(file_obj.file_size()));
         }
@@ -78,6 +167,98 @@ impl WrenFileRow {
         self.set_tooltip_text(Some(&tooltip));
     }
 
+    /// Decide what to show in the size column for a directory row, applying
+    /// the user's folder_count_policy. The async enumeration writes back into
+    /// the row only if the row is still bound to the same URI — see the
+    /// inline comment in the spawned future.
+    fn bind_folder_count(&self, file_obj: &FileObject, show_hidden: bool) {
+        let imp = self.imp();
+        let dir = file_obj.file().clone();
+        let uri = dir.uri().to_string();
+
+        // Stamp the URI on the row — the future compares against this on
+        // completion to detect that GtkListView recycled the row mid-flight.
+        *imp.pending_count_uri.borrow_mut() = Some(uri.clone());
+
+        let policy = current_policy();
+        let is_local = dir.uri_scheme().as_deref() == Some("file");
+
+        match policy {
+            FolderCountPolicy::Never => {
+                imp.size.set_label("—");
+                return;
+            }
+            FolderCountPolicy::Local if !is_local => {
+                imp.size.set_label("—");
+                return;
+            }
+            _ => {}
+        }
+
+        // Cache hit — synchronous path, no future spawn.
+        if let Some(count) = cache_lookup(&uri, show_hidden) {
+            imp.size.set_label(&format_item_count(count));
+            return;
+        }
+
+        imp.size.set_label("…");
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = row)]
+            self,
+            async move {
+                let Ok(enumerator) = dir
+                    .enumerate_children_future(
+                        gio::FILE_ATTRIBUTE_STANDARD_NAME,
+                        gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                        glib::Priority::LOW,
+                    )
+                    .await
+                else {
+                    if row_still_bound_to(&row, &uri) {
+                        row.imp().size.set_label("—");
+                    }
+                    return;
+                };
+
+                let mut count: u32 = 0;
+                loop {
+                    // Re-check policy each batch so toggling Always→Never
+                    // mid-enumeration aborts a long-running scan.
+                    if matches!(current_policy(), FolderCountPolicy::Never) {
+                        return;
+                    }
+                    if !row_still_bound_to(&row, &uri) {
+                        return;
+                    }
+                    let Ok(infos) = enumerator
+                        .next_files_future(100, glib::Priority::LOW)
+                        .await
+                    else {
+                        if row_still_bound_to(&row, &uri) {
+                            row.imp().size.set_label("—");
+                        }
+                        return;
+                    };
+                    if infos.is_empty() {
+                        break;
+                    }
+                    for info in infos {
+                        if !show_hidden && info.is_hidden() {
+                            continue;
+                        }
+                        count += 1;
+                    }
+                }
+
+                cache_store(uri.clone(), show_hidden, count);
+                if row_still_bound_to(&row, &uri) {
+                    row.imp().size.set_label(&format_item_count(count));
+                }
+            }
+        ));
+    }
+
     pub fn set_icon_size(&self, px: u32) {
         let imp = self.imp();
         imp.icon_size.set(px);
@@ -88,6 +269,7 @@ impl WrenFileRow {
     pub fn unbind(&self) {
         let imp = self.imp();
         *imp.bound_file.borrow_mut() = None;
+        *imp.pending_count_uri.borrow_mut() = None;
         imp.name.set_label("");
         imp.content_type.set_label("");
         imp.size.set_label("");
@@ -95,6 +277,14 @@ impl WrenFileRow {
         imp.icon.set_pixel_size(24);
         imp.icon.clear();
     }
+}
+
+fn row_still_bound_to(row: &WrenFileRow, uri: &str) -> bool {
+    row.imp()
+        .pending_count_uri
+        .borrow()
+        .as_deref()
+        .map_or(false, |u| u == uri)
 }
 
 fn strip_extension_name(name: &str) -> String {

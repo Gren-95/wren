@@ -191,6 +191,7 @@ impl WrenWindow {
         tab.file_list.setup_empty_area_click();
         tab.file_grid.set_show_extensions(imp.show_extensions.get());
         tab.file_list.set_show_extensions(imp.show_extensions.get());
+        tab.file_list.set_show_hidden(imp.show_hidden.get());
 
         // Restore per-tab state when supplied (session restore), otherwise
         // fall back to the global app prefs (used for new tabs and legacy).
@@ -711,6 +712,16 @@ impl WrenWindow {
         }
     }
 
+    /// Force every tab's list view to rebind its visible rows. Used by the
+    /// folder-count policy change handler so the new policy takes effect
+    /// without requiring a scroll or reload.
+    pub fn refresh_visible_list_rows(&self) {
+        let tabs = self.imp().tabs.borrow();
+        for tab in tabs.iter() {
+            tab.file_list.rebind_visible_rows();
+        }
+    }
+
     pub fn reload(&self) {
         let Some(idx) = self.current_tab_index() else {
             return;
@@ -720,6 +731,11 @@ impl WrenWindow {
             tabs.get(idx).and_then(|t| t.navigation.current().cloned())
         };
         if let Some(loc) = current {
+            // Drop any cached folder counts under this directory so that
+            // external changes (files added/removed in a child folder)
+            // surface on the next bind. Cheaper to clear everything than
+            // to walk the cache for prefix matches.
+            crate::file_view::row::clear_folder_count_cache();
             self.load_location_for_tab(idx, loc);
         }
     }
@@ -956,8 +972,12 @@ impl WrenWindow {
         let imp = self.imp();
         let show_hidden = imp.show_hidden.get();
         let current_idx = self.current_tab_index();
+        // Folder counts include/exclude hidden children based on the same flag,
+        // so any cached counts are now stale.
+        crate::file_view::row::clear_folder_count_cache();
         let tabs = imp.tabs.borrow();
         for (i, tab) in tabs.iter().enumerate() {
+            tab.file_list.set_show_hidden(show_hidden);
             let Some(model) = tab.dir_model.as_ref() else { continue };
             // Background tabs have no live search; only the current tab's
             // search_entry text matters for content_stack state.
@@ -2038,6 +2058,44 @@ impl WrenWindow {
             }
         ));
         performance_group.add(&policy_row);
+
+        // Folder item count policy
+        let folder_count_options = gtk4::StringList::new(&["Always", "On this computer only", "Never"]);
+        let folder_count_row = adw::ComboRow::new();
+        folder_count_row.set_title("Show folder item count");
+        folder_count_row.set_subtitle("Counting items in folders can be slow on network or removable drives");
+        folder_count_row.set_model(Some(&folder_count_options));
+        let initial_fc_policy = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.folder_count_policy())
+            .unwrap_or_else(|| "always".to_string());
+        let initial_fc_idx: u32 = match initial_fc_policy.as_str() {
+            "local" => 1,
+            "never" => 2,
+            _ => 0,
+        };
+        folder_count_row.set_selected(initial_fc_idx);
+        folder_count_row.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let policy = match row.selected() {
+                    1 => "local",
+                    2 => "never",
+                    _ => "always",
+                };
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_folder_count_policy(policy);
+                }
+                // Drop existing counts and rebind visible rows so the new
+                // policy is reflected immediately (e.g. Always→Never blanks
+                // the column without waiting for the user to scroll).
+                crate::file_view::row::clear_folder_count_cache();
+                window.refresh_visible_list_rows();
+            }
+        ));
+        performance_group.add(&folder_count_row);
         page.add(&performance_group);
 
         // Context menu group
