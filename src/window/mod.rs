@@ -699,33 +699,17 @@ impl WrenWindow {
                         // success, so the user's click goes through
                         // without an error page in the way.
                         // NOT_DIRECTORY → user navigated to a path the
-                        // backend lists but enumerate-children rejects
+                        // backend lists but isn't actually navigable
                         // (macOS AppleDouble `._foo` metadata on SMB
-                        // shares is the canonical case). Try to open
-                        // it as a file via FileLauncher and step the
-                        // tab back to its previous location instead of
-                        // leaving the user on an error page.
+                        // shares is the canonical case). Don't try to
+                        // launch as a file — for non-file URIs that
+                        // pops the system "no apps for smb://…" dialog
+                        // which is worse than just leaving the user
+                        // where they were. Toast + step back, matching
+                        // Nautilus's behaviour.
                         if e.matches(gio::IOErrorEnum::NotDirectory) {
-                            let parent_window = window.upcast_ref::<gtk4::Window>();
-                            let launcher = gtk4::FileLauncher::new(Some(&location));
-                            let parent_clone: gtk4::Window = parent_window.clone();
-                            glib::spawn_future_local(glib::clone!(
-                                #[weak] window,
-                                async move {
-                                    let res = launcher.launch_future(Some(&parent_clone)).await;
-                                    if let Err(err) = res {
-                                        if !err.matches(gtk4::DialogError::Dismissed) {
-                                            window.show_toast(&format!(
-                                                "Cannot open: {}",
-                                                err.message()
-                                            ));
-                                        }
-                                    }
-                                    // Step back so the breadcrumb / model
-                                    // reflects the last working location.
-                                    window.navigate_back();
-                                }
-                            ));
+                            window.show_toast("Not a folder");
+                            window.navigate_back();
                             return;
                         }
                         if e.matches(gio::IOErrorEnum::NotMounted) {
