@@ -191,6 +191,11 @@ impl WrenWindow {
         tab.sort_key = sort_key;
         tab.sort_reversed = reversed;
         tab.file_list.set_sort_state(sort_key.as_str(), reversed);
+        if let Some(a) = &app {
+            let single = a.single_click();
+            tab.file_grid.set_single_click_activate(single);
+            tab.file_list.set_single_click_activate(single);
+        }
 
         let page = imp.tab_view.append(&tab.content_widget);
         page.set_title("Home");
@@ -2676,6 +2681,40 @@ impl WrenWindow {
         ));
         advanced_group.add(&log_row);
         advanced_page.add(&advanced_group);
+
+        // Single-click toggle — added to the existing Files page (its
+        // "Files" group already lives there; we add a dedicated row here
+        // so this stays self-contained and doesn't tangle with the
+        // existing group construction further up).
+        let single_click_group = adw::PreferencesGroup::new();
+        single_click_group.set_title("Behavior");
+
+        let single_click_row = adw::SwitchRow::new();
+        single_click_row.set_title("Single-click to open");
+        single_click_row.set_subtitle("Open files and folders with a single click");
+        let initial_single = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.single_click())
+            .unwrap_or(false);
+        single_click_row.set_active(initial_single);
+        single_click_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let v = row.is_active();
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_single_click(v);
+                }
+                let imp = window.imp();
+                for tab in imp.tabs.borrow().iter() {
+                    tab.file_grid.set_single_click_activate(v);
+                    tab.file_list.set_single_click_activate(v);
+                }
+            }
+        ));
+        single_click_group.add(&single_click_row);
+        files_page.add(&single_click_group);
 
         dialog.add(&general_page);
         dialog.add(&files_page);
