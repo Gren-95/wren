@@ -339,6 +339,14 @@ impl WrenSidebar {
                 p
             })
             .collect();
+        // Last-resort fallback for GOA-backed mounts where neither the
+        // identifier, activation_root, nor drive matches: dedupe by
+        // case-insensitive display-name. Cloud accounts surface under
+        // the same human-readable name in both the volume and the mount.
+        let mounted_names: std::collections::HashSet<String> = mounts
+            .iter()
+            .map(|m| m.name().to_string().to_lowercase())
+            .collect();
 
         let unmounted: Vec<gio::Volume> = volumes
             .into_iter()
@@ -363,6 +371,9 @@ impl WrenSidebar {
                     if mounted_drives.contains(&p) {
                         return false;
                     }
+                }
+                if mounted_names.contains(&v.name().to_string().to_lowercase()) {
+                    return false;
                 }
                 true
             })
@@ -700,6 +711,18 @@ impl WrenSidebar {
         let win = row
             .root()
             .and_downcast::<crate::window::WrenWindow>();
+        let sidebar_weak: glib::WeakRef<Self> = {
+            let mut p: Option<gtk4::Widget> = row.parent();
+            let mut found: Option<Self> = None;
+            while let Some(parent) = p {
+                if let Ok(s) = parent.clone().downcast::<Self>() {
+                    found = Some(s);
+                    break;
+                }
+                p = parent.parent();
+            }
+            found.map(|s| s.downgrade()).unwrap_or_default()
+        };
         // gtk4::MountOperation extends gio::MountOperation and renders a
         // proper dialog for ask-password / ask-question signals — the
         // bare gio::MountOperation just errors when those fire, which
@@ -712,15 +735,22 @@ impl WrenSidebar {
                 .await
             {
                 Ok(()) => {
-                    if let (Some(win), Some(mount)) = (win, volume.get_mount()) {
+                    if let (Some(ref win), Some(mount)) = (win.as_ref(), volume.get_mount()) {
                         win.navigate_to(mount.root());
                     }
                 }
                 Err(e) => {
-                    if let Some(win) = win {
+                    if let Some(ref win) = win {
                         win.show_toast(&format!("Could not mount: {e}"));
                     }
                 }
+            }
+            // GOA-backed mounts (Google Drive, Nextcloud, …) sometimes
+            // don't fire mount-added on the volume monitor, so the
+            // sidebar wouldn't notice the row should now appear under
+            // mounted devices. Force a refresh either way.
+            if let Some(sidebar) = sidebar_weak.upgrade() {
+                sidebar.reload_volumes();
             }
         });
     }
