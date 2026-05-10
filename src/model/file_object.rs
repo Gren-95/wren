@@ -43,7 +43,7 @@ impl FileObject {
         "standard::name,standard::display-name,standard::type,standard::icon,\
          standard::content-type,standard::size,standard::is-hidden,\
          standard::is-symlink,time::modified,access::can-delete,\
-         access::can-rename,thumbnail::path";
+         access::can-rename,access::can-read,thumbnail::path";
 
     pub fn new(file: gio::File, info: gio::FileInfo) -> Self {
         let name = info.display_name().to_string();
@@ -103,5 +103,19 @@ impl FileObject {
     /// use this to overlay a small arrow badge on the icon.
     pub fn is_symlink(&self) -> bool {
         self.file_info().is_symlink()
+    }
+
+    /// True when the current user has read access. Driven by
+    /// `access::can-read` (queried via QUERY_ATTRS). When the
+    /// attribute is missing we conservatively assume readable so
+    /// remote/virtual filesystems that don't report access bits
+    /// don't get falsely flagged.
+    pub fn is_readable(&self) -> bool {
+        let info = self.file_info();
+        if info.has_attribute(gio::FILE_ATTRIBUTE_ACCESS_CAN_READ) {
+            info.boolean(gio::FILE_ATTRIBUTE_ACCESS_CAN_READ)
+        } else {
+            true
+        }
     }
 }

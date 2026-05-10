@@ -67,6 +67,7 @@ impl WrenFileRow {
         // See cell::bind for why we use a manual overlay badge
         // instead of EmblemedIcon.
         imp.symlink_badge.set_visible(file_obj.is_symlink());
+        imp.unreadable_badge.set_visible(!file_obj.is_readable());
 
         // Hover tooltip = full path (URI fallback for non-local files).
         let tooltip = file_obj

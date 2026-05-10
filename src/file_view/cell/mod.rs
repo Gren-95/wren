@@ -158,6 +158,7 @@ impl WrenFileCell {
         // overlay our own small GtkImage at the icon's bottom-right
         // and toggle its visibility — far more reliable.
         imp.symlink_badge.set_visible(file_obj.is_symlink());
+        imp.unreadable_badge.set_visible(!file_obj.is_readable());
     }
 
     pub fn bound_file_object(&self) -> Option<FileObject> {
