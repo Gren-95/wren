@@ -3949,8 +3949,19 @@ impl WrenWindow {
             return;
         };
         if app.push_recent_uri(&uri) {
+            // reload_recents → reload_volumes → re-applies set_location
+            // automatically off the active tab's URI, so no follow-up
+            // call needed here.
             self.imp().sidebar.reload_recents();
         }
+    }
+
+    /// Current tab's location, if any. Used by the sidebar to re-apply
+    /// its active-place highlight after rebuilds.
+    pub fn current_location(&self) -> Option<gio::File> {
+        let idx = self.current_tab_index()?;
+        let tabs = self.imp().tabs.borrow();
+        tabs.get(idx).and_then(|t| t.navigation.current().cloned())
     }
 
     pub fn remove_bookmark(&self, uri: &str) {

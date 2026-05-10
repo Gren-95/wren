@@ -166,6 +166,18 @@ impl WrenSidebar {
         self.append_recents_section();
         self.append_bookmarks_section();
         self.append_volumes_section();
+
+        // Rebuilds wipe the GtkListBox selection (the new rows have no
+        // selected state). Re-apply the active-place highlight by asking
+        // the window for the current tab's location.
+        if let Some(win) = self
+            .root()
+            .and_downcast::<crate::window::WrenWindow>()
+        {
+            if let Some(loc) = win.current_location() {
+                self.set_location(&loc);
+            }
+        }
     }
 
     fn append_recents_section(&self) {
