@@ -244,6 +244,7 @@ button.wren-sidebar-toggle:hover {
    sits on the trailing edge of mounted-volume rows. */
 .wren-volume-unmounted {
   color: alpha(currentColor, 0.55);
+  font-style: italic;
 }
 
 button.wren-volume-eject {

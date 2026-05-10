@@ -381,15 +381,13 @@ impl WrenSidebar {
 
         // Unmounted volumes — clicking activates them via mount_future.
         for volume in &unmounted {
-            let name = volume.name().to_string();
-            let icon_name = volume
-                .icon()
-                .downcast::<gio::ThemedIcon>()
-                .ok()
-                .and_then(|ti| ti.names().into_iter().next())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "drive-removable-media-symbolic".to_string());
-            let row = Self::build_volume_row(&name, &icon_name, true);
+            // Stronger visual cue than just dimming the icon (which doesn't
+            // affect non-symbolic gicons GVFS hands out for cloud accounts):
+            // append " (offline)" to the label, force the symbolic
+            // network-offline-symbolic icon, and italicise via the CSS
+            // class wired in build_volume_row.
+            let name = format!("{} (offline)", volume.name());
+            let row = Self::build_volume_row(&name, "network-offline-symbolic", true);
             Self::attach_volume_context_menu(&row, None, Some(volume.clone()));
             list.append(&row);
             // Empty URI = handled specially by row_activated; we still need
@@ -667,10 +665,15 @@ impl WrenSidebar {
         let win = row
             .root()
             .and_downcast::<crate::window::WrenWindow>();
-        let op = gio::MountOperation::new();
+        // gtk4::MountOperation extends gio::MountOperation and renders a
+        // proper dialog for ask-password / ask-question signals — the
+        // bare gio::MountOperation just errors when those fire, which
+        // is why cloud-account remounts silently failed before.
+        let op = gtk4::MountOperation::new(win.as_ref());
+        let op_g: gio::MountOperation = op.upcast();
         glib::spawn_future_local(async move {
             match volume
-                .mount_future(gio::MountMountFlags::NONE, Some(&op))
+                .mount_future(gio::MountMountFlags::NONE, Some(&op_g))
                 .await
             {
                 Ok(()) => {
