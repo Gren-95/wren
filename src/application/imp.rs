@@ -5,6 +5,8 @@ use gtk4::prelude::*;
 
 use crate::window::WrenWindow;
 
+use super::TabPref;
+
 #[derive(Debug)]
 pub struct WrenApplication {
     pub terminal_cmd: RefCell<String>,
@@ -19,7 +21,7 @@ pub struct WrenApplication {
     pub window_maximized: Cell<bool>,
     pub sidebar_visible: Cell<bool>,
     pub last_directory: RefCell<String>,
-    pub last_tabs: RefCell<Vec<String>>,
+    pub tab_states: RefCell<Vec<TabPref>>,
     pub last_tab_index: Cell<i32>,
     pub color_scheme: RefCell<String>,
     pub animations_enabled: Cell<bool>,
@@ -45,7 +47,7 @@ impl Default for WrenApplication {
             window_maximized: Cell::new(false),
             sidebar_visible: Cell::new(true),
             last_directory: RefCell::new(String::new()),
-            last_tabs: RefCell::new(Vec::new()),
+            tab_states: RefCell::new(Vec::new()),
             last_tab_index: Cell::new(0),
             color_scheme: RefCell::new("default".to_string()),
             animations_enabled: Cell::new(true),
@@ -109,20 +111,49 @@ impl WrenApplication {
             if let Ok(v) = kf.string("General", "last_directory") {
                 *self.last_directory.borrow_mut() = v.to_string();
             }
-            // Stored as a single \t-joined string. \t can't appear in a
-            // URI (RFC 3986 reserves only printable chars), so it's safe
-            // as a separator without escaping. Splitting an empty string
-            // would yield [""], hence the explicit empty check.
-            if let Ok(joined) = kf.string("General", "last_tabs") {
+            // Per-tab state lives under [Tabs] as `tabN=uri|sort_key|asc|grid`.
+            // If [Tabs] is present, it wins. Otherwise we migrate the legacy
+            // [General] last_tabs (a \t-joined URI list) and synthesise per-tab
+            // entries using the global [Sort]/[View] defaults loaded above.
+            // The legacy keys are left in the file untouched on save (KeyFile
+            // preserves untouched groups); they just stop being read once the
+            // new [Tabs] block exists.
+            if let Ok(v) = kf.integer("General", "last_tab_index") {
+                self.last_tab_index.set(v.max(0));
+            }
+            if kf.has_group("Tabs") {
+                let count = kf.integer("Tabs", "count").unwrap_or(0).max(0) as usize;
+                let mut tabs = Vec::with_capacity(count);
+                for i in 0..count {
+                    let key = format!("tab{i}");
+                    let Ok(line) = kf.string("Tabs", &key) else { continue };
+                    if let Some(pref) = TabPref::parse_line(line.as_str()) {
+                        tabs.push(pref);
+                    }
+                }
+                *self.tab_states.borrow_mut() = tabs;
+                if let Ok(v) = kf.integer("Tabs", "active") {
+                    self.last_tab_index.set(v.max(0));
+                }
+            } else if let Ok(joined) = kf.string("General", "last_tabs") {
                 let s = joined.to_string();
-                *self.last_tabs.borrow_mut() = if s.is_empty() {
+                let uris: Vec<String> = if s.is_empty() {
                     Vec::new()
                 } else {
                     s.split('\t').map(|s| s.to_string()).collect()
                 };
-            }
-            if let Ok(v) = kf.integer("General", "last_tab_index") {
-                self.last_tab_index.set(v.max(0));
+                let view = self.view_mode.borrow().clone();
+                let key = self.sort_key.borrow().clone();
+                let reversed = self.sort_reversed.get();
+                *self.tab_states.borrow_mut() = uris
+                    .into_iter()
+                    .map(|uri| TabPref {
+                        uri,
+                        sort_key: key.clone(),
+                        reversed,
+                        view_mode: view.clone(),
+                    })
+                    .collect();
             }
             if let Ok(v) = kf.boolean("Appearance", "animations") {
                 self.animations_enabled.set(v);
@@ -180,12 +211,16 @@ impl WrenApplication {
         kf.set_boolean("Window", "maximized", self.window_maximized.get());
         kf.set_boolean("Window", "sidebar_visible", self.sidebar_visible.get());
         kf.set_string("General", "last_directory", &self.last_directory.borrow());
-        kf.set_string(
-            "General",
-            "last_tabs",
-            &self.last_tabs.borrow().join("\t"),
-        );
+        let tabs = self.tab_states.borrow();
+        kf.set_integer("Tabs", "count", tabs.len() as i32);
+        for (i, pref) in tabs.iter().enumerate() {
+            kf.set_string("Tabs", &format!("tab{i}"), &pref.to_line());
+        }
+        kf.set_integer("Tabs", "active", self.last_tab_index.get());
+        // Mirror to legacy [General] last_tab_index for forward-compat with
+        // older builds reading a config we wrote.
         kf.set_integer("General", "last_tab_index", self.last_tab_index.get());
+        drop(tabs);
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         kf.set_boolean("General", "debug_logging", self.debug_logging.get());

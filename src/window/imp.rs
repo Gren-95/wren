@@ -746,26 +746,28 @@ impl ObjectImpl for WrenWindow {
 
         // Restore tabs from the previous session if any of them still
         // exist on disk; fall back to last_directory, then $HOME.
+        // Each TabPref carries its URI plus the sort/view it had at close,
+        // so we use add_tab_with_state to apply that before navigate_to runs
+        // (the sort is read from tab.sort_key when the dir model is built).
         let app = obj
             .application()
             .and_downcast::<crate::application::WrenApplication>();
-        let saved_tabs: Vec<gio::File> = app
+        let saved: Vec<crate::application::TabPref> = app
             .as_ref()
-            .map(|a| a.last_tabs())
+            .map(|a| a.tab_states())
             .unwrap_or_default()
             .into_iter()
-            .map(|uri| gio::File::for_uri(&uri))
-            .filter(|f| f.query_exists(gio::Cancellable::NONE))
+            .filter(|p| gio::File::for_uri(&p.uri).query_exists(gio::Cancellable::NONE))
             .collect();
 
-        if !saved_tabs.is_empty() {
-            for file in &saved_tabs {
-                obj.add_tab(file.clone());
+        if !saved.is_empty() {
+            for pref in &saved {
+                obj.add_tab_with_state(gio::File::for_uri(&pref.uri), Some(pref));
             }
             // Restore which tab was active. Clamp because the saved
             // index may be out of range if some tabs disappeared.
             if let Some(a) = &app {
-                let idx = a.last_tab_index().clamp(0, (saved_tabs.len() as i32) - 1);
+                let idx = a.last_tab_index().clamp(0, (saved.len() as i32) - 1);
                 obj.activate_tab_at(idx as usize);
             }
         } else {
