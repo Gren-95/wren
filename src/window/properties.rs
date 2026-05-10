@@ -821,9 +821,13 @@ fn build_open_with_page(win: &WrenWindow, subject: &Subject) -> adw::Preferences
     let default = gio::AppInfo::default_for_type(&subject.content_type, false);
     let default_id = default.as_ref().map(|d| d.id());
 
-    // Track the row most recently marked default so we can clear its
-    // checkmark when another row claims it.
-    let current_default_row: Rc<RefCell<Option<adw::ActionRow>>> = Rc::new(RefCell::new(None));
+    // Track the (row, check-image) pair most recently marked default so
+    // we can detach the old check on a new selection. Storing the
+    // GtkImage directly is the only reliable way — AdwActionRow stows
+    // suffix children deep in its internal layout, so observe_children()
+    // can't introspect them and we'd accumulate one check per click.
+    let current_default: Rc<RefCell<Option<(adw::ActionRow, gtk4::Image)>>> =
+        Rc::new(RefCell::new(None));
 
     for app in apps.iter() {
         let row = adw::ActionRow::new();
@@ -843,24 +847,28 @@ fn build_open_with_page(win: &WrenWindow, subject: &Subject) -> adw::Preferences
             _ => false,
         };
         if is_default {
-            attach_default_check(&row);
-            *current_default_row.borrow_mut() = Some(row.clone());
+            let check = make_default_check();
+            row.add_suffix(&check);
+            *current_default.borrow_mut() = Some((row.clone(), check));
         }
 
         let app_clone = app.clone();
         let content_type = subject.content_type.clone();
-        let current_default_row = current_default_row.clone();
+        let current_default = current_default.clone();
         row.connect_activated(clone!(
             #[weak(rename_to = window)]
             win,
             move |row| {
                 match app_clone.set_as_default_for_type(&content_type) {
                     Ok(()) => {
-                        if let Some(prev) = current_default_row.borrow_mut().take() {
-                            clear_default_check(&prev);
+                        if let Some((prev_row, prev_check)) = current_default.borrow_mut().take() {
+                            prev_row.remove(&prev_check);
+                            // No-op when prev_row IS row — we're about to
+                            // re-add a fresh check below.
                         }
-                        attach_default_check(row);
-                        *current_default_row.borrow_mut() = Some(row.clone());
+                        let check = make_default_check();
+                        row.add_suffix(&check);
+                        *current_default.borrow_mut() = Some((row.clone(), check));
                         window.show_toast(&format!(
                             "{} is now the default",
                             app_clone.display_name()
@@ -881,43 +889,14 @@ fn build_open_with_page(win: &WrenWindow, subject: &Subject) -> adw::Preferences
     page
 }
 
-fn attach_default_check(row: &adw::ActionRow) {
-    use gtk4::prelude::ListModelExtManual;
-    // Skip if a check is already attached (re-entry safe).
-    let already = row
-        .observe_children()
-        .iter::<glib::Object>()
-        .filter_map(|w| w.ok())
-        .any(|w| {
-            w.downcast_ref::<gtk4::Image>().is_some_and(|img| {
-                img.icon_name().as_deref() == Some("emblem-ok-symbolic")
-            })
-        });
-    if already {
-        return;
-    }
+/// Build the "this app is the default" checkmark suffix. Caller is
+/// responsible for attaching it to the row and remembering the widget
+/// so it can be removed when another row claims default status.
+fn make_default_check() -> gtk4::Image {
     let check = gtk4::Image::from_icon_name("emblem-ok-symbolic");
     check.add_css_class("accent");
     check.set_tooltip_text(Some("Default application"));
-    row.add_suffix(&check);
-}
-
-fn clear_default_check(row: &adw::ActionRow) {
-    use gtk4::prelude::ListModelExtManual;
-    let to_remove: Vec<gtk4::Widget> = row
-        .observe_children()
-        .iter::<glib::Object>()
-        .filter_map(|w| w.ok())
-        .filter_map(|w| w.downcast::<gtk4::Widget>().ok())
-        .filter(|w| {
-            w.downcast_ref::<gtk4::Image>().is_some_and(|img| {
-                img.icon_name().as_deref() == Some("emblem-ok-symbolic")
-            })
-        })
-        .collect();
-    for w in to_remove {
-        row.remove(&w);
-    }
+    check
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
