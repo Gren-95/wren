@@ -96,7 +96,7 @@ impl WrenWindow {
             self,
             move |file_obj| {
                 if file_obj.is_directory() {
-                    window.navigate_to(file_obj.file().clone());
+                    window.navigate_to(window.target_for_activation(file_obj));
                 } else {
                     let uri = file_obj.file().uri();
                     if let Err(e) = gio::AppInfo::launch_default_for_uri(
@@ -113,7 +113,7 @@ impl WrenWindow {
             self,
             move |file_obj| {
                 if file_obj.is_directory() {
-                    window.navigate_to(file_obj.file().clone());
+                    window.navigate_to(window.target_for_activation(file_obj));
                 } else {
                     let uri = file_obj.file().uri();
                     if let Err(e) = gio::AppInfo::launch_default_for_uri(
@@ -133,7 +133,7 @@ impl WrenWindow {
             #[weak(rename_to = window)] self,
             move |obj: &FileObject| {
                 if obj.is_directory() {
-                    window.add_tab(obj.file().clone());
+                    window.add_tab(window.target_for_activation(obj));
                 } else {
                     let uri = obj.file().uri();
                     if let Err(e) = gio::AppInfo::launch_default_for_uri(
@@ -278,6 +278,26 @@ impl WrenWindow {
     }
 
     // ── Navigation ───────────────────────────────────────────────────────────
+
+    /// Resolve the navigation target for an activated entry. For symlinked
+    /// directories we re-anchor onto the current tab's location so the
+    /// breadcrumb shows the path the user clicked through (e.g. `~/projects`)
+    /// rather than the symlink's resolved target (`/mnt/data/projects`).
+    pub fn target_for_activation(&self, file_obj: &FileObject) -> gio::File {
+        if file_obj.is_symlink() && file_obj.is_directory() {
+            let parent = self.current_tab_index().and_then(|idx| {
+                self.imp()
+                    .tabs
+                    .borrow()
+                    .get(idx)
+                    .and_then(|t| t.navigation.current().cloned())
+            });
+            if let Some(parent) = parent {
+                return parent.child(file_obj.file_info().name());
+            }
+        }
+        file_obj.file().clone()
+    }
 
     pub fn navigate_to(&self, location: gio::File) {
         let Some(idx) = self.current_tab_index() else {
@@ -1309,14 +1329,12 @@ impl WrenWindow {
     }
 
     pub fn open_selection(&self) {
-        for file in self.selected_files() {
-            let ftype =
-                file.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE);
-            if ftype == gio::FileType::Directory {
-                self.navigate_to(file);
+        for obj in self.selected_file_objects() {
+            if obj.is_directory() {
+                self.navigate_to(self.target_for_activation(&obj));
                 return;
             }
-            let uri = file.uri();
+            let uri = obj.file().uri();
             if let Err(e) = gio::AppInfo::launch_default_for_uri(
                 uri.as_str(),
                 gio::AppLaunchContext::NONE,
