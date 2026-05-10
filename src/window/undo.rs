@@ -14,6 +14,12 @@ pub enum UndoOp {
     Trash {
         originals: Vec<gio::File>,
     },
+    /// Cut+paste move or drag-drop move of one or more files. Each
+    /// entry is `(from, to)` as the move occurred — undo runs `to → from`,
+    /// redo runs `from → to`. One Ctrl+Z reverses the whole batch.
+    MoveBatch {
+        moves: Vec<(gio::File, gio::File)>,
+    },
 }
 
 impl std::fmt::Debug for UndoOp {
@@ -24,6 +30,7 @@ impl std::fmt::Debug for UndoOp {
             }
             UndoOp::NewFolder { .. } => write!(f, "NewFolder"),
             UndoOp::Trash { originals } => write!(f, "Trash(n={})", originals.len()),
+            UndoOp::MoveBatch { moves } => write!(f, "MoveBatch(n={})", moves.len()),
         }
     }
 }

@@ -1902,6 +1902,74 @@ impl WrenWindow {
                     }
                 ));
             }
+            undo::UndoOp::MoveBatch { moves } => {
+                glib::spawn_future_local(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    async move {
+                        // Reverse: walk pairs `to → from`. Sequential to preserve
+                        // ordering and allow partial-failure resume on next Ctrl+Z.
+                        let mut undone: Vec<(gio::File, gio::File)> = Vec::new();
+                        let mut remaining: Vec<(gio::File, gio::File)> = Vec::new();
+                        let mut error: Option<glib::Error> = None;
+                        let mut iter = moves.into_iter();
+                        for (from, to) in iter.by_ref() {
+                            log_op("undo move", &to, Some(&from));
+                            let (fut, _progress) = to.move_future(
+                                &from,
+                                gio::FileCopyFlags::NONE,
+                                glib::Priority::DEFAULT,
+                            );
+                            match fut.await {
+                                Ok(()) => undone.push((from, to)),
+                                Err(e) => {
+                                    error = Some(e);
+                                    remaining.push((from, to));
+                                    break;
+                                }
+                            }
+                        }
+                        // Anything past the failure point hasn't been touched yet.
+                        remaining.extend(iter);
+
+                        if let Some(e) = error {
+                            // Drop the op when undo is genuinely impossible
+                            // (destination occupied or source missing) — the user
+                            // shouldn't keep retrying. Otherwise restore the
+                            // un-undone subset so a subsequent Ctrl+Z resumes.
+                            let drop_op = e.matches(gio::IOErrorEnum::Exists)
+                                || e.matches(gio::IOErrorEnum::NotFound);
+                            let toast = if e.matches(gio::IOErrorEnum::Exists) {
+                                "Cannot undo: original location already occupied"
+                                    .to_string()
+                            } else if e.matches(gio::IOErrorEnum::NotFound) {
+                                "Cannot undo: file no longer exists".to_string()
+                            } else {
+                                format!("Could not undo move: {}", e.message())
+                            };
+                            if !drop_op && !remaining.is_empty() {
+                                window.imp().undo_stack.borrow_mut().push(
+                                    undo::UndoOp::MoveBatch { moves: remaining },
+                                );
+                            }
+                            if !undone.is_empty() {
+                                window.imp().redo_stack.borrow_mut().push(
+                                    undo::UndoOp::MoveBatch { moves: undone },
+                                );
+                            }
+                            window.update_undo_actions();
+                            window.reload();
+                            window.show_toast(&toast);
+                        } else {
+                            window.imp().redo_stack.borrow_mut().push(
+                                undo::UndoOp::MoveBatch { moves: undone },
+                            );
+                            window.update_undo_actions();
+                            window.reload();
+                        }
+                    }
+                ));
+            }
         }
     }
 
@@ -1984,6 +2052,67 @@ impl WrenWindow {
                             .push(undo::UndoOp::Trash { originals });
                         window.update_undo_actions();
                         window.reload();
+                    }
+                ));
+            }
+            undo::UndoOp::MoveBatch { moves } => {
+                glib::spawn_future_local(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    async move {
+                        // Re-apply: walk pairs `from → to`.
+                        let mut redone: Vec<(gio::File, gio::File)> = Vec::new();
+                        let mut remaining: Vec<(gio::File, gio::File)> = Vec::new();
+                        let mut error: Option<glib::Error> = None;
+                        let mut iter = moves.into_iter();
+                        for (from, to) in iter.by_ref() {
+                            log_op("redo move", &from, Some(&to));
+                            let (fut, _progress) = from.move_future(
+                                &to,
+                                gio::FileCopyFlags::NONE,
+                                glib::Priority::DEFAULT,
+                            );
+                            match fut.await {
+                                Ok(()) => redone.push((from, to)),
+                                Err(e) => {
+                                    error = Some(e);
+                                    remaining.push((from, to));
+                                    break;
+                                }
+                            }
+                        }
+                        remaining.extend(iter);
+
+                        if let Some(e) = error {
+                            let drop_op = e.matches(gio::IOErrorEnum::Exists)
+                                || e.matches(gio::IOErrorEnum::NotFound);
+                            let toast = if e.matches(gio::IOErrorEnum::Exists) {
+                                "Cannot redo: destination already occupied".to_string()
+                            } else if e.matches(gio::IOErrorEnum::NotFound) {
+                                "Cannot redo: file no longer exists".to_string()
+                            } else {
+                                format!("Could not redo move: {}", e.message())
+                            };
+                            if !drop_op && !remaining.is_empty() {
+                                window.imp().redo_stack.borrow_mut().push(
+                                    undo::UndoOp::MoveBatch { moves: remaining },
+                                );
+                            }
+                            if !redone.is_empty() {
+                                window.imp().undo_stack.borrow_mut().push(
+                                    undo::UndoOp::MoveBatch { moves: redone },
+                                );
+                            }
+                            window.update_undo_actions();
+                            window.reload();
+                            window.show_toast(&toast);
+                        } else {
+                            window.imp().undo_stack.borrow_mut().push(
+                                undo::UndoOp::MoveBatch { moves: redone },
+                            );
+                            window.update_undo_actions();
+                            window.reload();
+                        }
                     }
                 ));
             }

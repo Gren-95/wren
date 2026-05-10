@@ -178,6 +178,7 @@ impl WrenWindow {
                 handle.set_total(total_items, total_bytes);
 
                 let mut policy: Option<ConflictResolution> = None;
+                let mut moves: Vec<(gio::File, gio::File)> = Vec::new();
                 let succeeded = 'op: {
                 for (idx, file) in files.iter().enumerate() {
                     if handle.cancellable.is_cancelled() {
@@ -275,6 +276,7 @@ impl WrenWindow {
                             }
                             break 'op false;
                         }
+                        moves.push((file.clone(), dest.clone()));
                     }
                 }
                 true
@@ -285,6 +287,15 @@ impl WrenWindow {
                     window.imp().clipboard_files.replace(None);
                     window.update_cut_indicator(&[]);
                     window.update_selection_actions();
+                    if !moves.is_empty() {
+                        window
+                            .imp()
+                            .undo_stack
+                            .borrow_mut()
+                            .push(super::undo::UndoOp::MoveBatch { moves });
+                        window.imp().redo_stack.borrow_mut().clear();
+                        window.update_undo_actions();
+                    }
                 }
                 window.op_finish(&handle);
                 window.reload();
@@ -512,6 +523,7 @@ impl WrenWindow {
                     pre_walk_total(&files, is_move, &handle.cancellable).await;
                 handle.set_total(total_items, total_bytes);
 
+                let mut moves: Vec<(gio::File, gio::File)> = Vec::new();
                 // Drag-drop intentionally diverges from paste here:
                 // we *never* ask "Replace / Skip / Rename" on a name
                 // collision. Drag-drop is a quick gesture, the user
@@ -575,12 +587,22 @@ impl WrenWindow {
                             }
                             break 'op false;
                         }
+                        moves.push((file.clone(), dest.clone()));
                     }
                 }
                 true
                 };
                 if succeeded { handle.mark_succeeded(); }
                 handle.set_fraction(1.0);
+                if is_move && !moves.is_empty() {
+                    window
+                        .imp()
+                        .undo_stack
+                        .borrow_mut()
+                        .push(super::undo::UndoOp::MoveBatch { moves });
+                    window.imp().redo_stack.borrow_mut().clear();
+                    window.update_undo_actions();
+                }
                 window.op_finish(&handle);
                 window.reload();
             }
