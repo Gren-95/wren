@@ -42,6 +42,8 @@ pub struct WrenWindow {
     #[template_child]
     pub view_button: TemplateChild<gtk4::MenuButton>,
     #[template_child]
+    pub filter_button: TemplateChild<gtk4::MenuButton>,
+    #[template_child]
     pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
     #[template_child]
     pub op_button: TemplateChild<gtk4::MenuButton>,
@@ -90,6 +92,7 @@ impl Default for WrenWindow {
             sidebar_button: Default::default(),
             menu_button: Default::default(),
             view_button: Default::default(),
+            filter_button: Default::default(),
             breadcrumb_bar: Default::default(),
             op_button: Default::default(),
             banner: Default::default(),
@@ -528,6 +531,44 @@ impl ObjectImpl for WrenWindow {
             }
         ));
         obj.add_action(&view_mode_action);
+
+        // Mime-filter dropdown menu
+        let filter_menu = gio::Menu::new();
+        for (label, key) in &[
+            ("All", "all"),
+            ("Images", "images"),
+            ("Videos", "videos"),
+            ("Audio", "audio"),
+            ("Documents", "documents"),
+            ("Archives", "archives"),
+        ] {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(
+                Some("win.set-mime-filter"),
+                Some(&key.to_variant()),
+            );
+            filter_menu.append_item(&item);
+        }
+        obj.imp().filter_button.set_menu_model(Some(&filter_menu));
+
+        // Stateful mime-filter action
+        let mime_filter_action = gio::SimpleAction::new_stateful(
+            "set-mime-filter",
+            Some(glib::VariantTy::STRING),
+            &"all".to_variant(),
+        );
+        mime_filter_action.connect_activate(glib::clone!(
+            #[weak]
+            obj,
+            move |action, param| {
+                if let Some(key) = param.and_then(|v| v.str()) {
+                    crate::wren_log!("action: win.set-mime-filter({key})");
+                    action.set_state(&key.to_variant());
+                    obj.set_mime_filter(key);
+                }
+            }
+        ));
+        obj.add_action(&mime_filter_action);
 
         // Hamburger menu
         let hamburger = gio::Menu::new();

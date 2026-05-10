@@ -4,7 +4,7 @@ use adw::prelude::*;
 
 use crate::file_view::grid::WrenFileGrid;
 use crate::file_view::list::WrenFileList;
-use crate::model::{DirectoryModel, SortKey};
+use crate::model::{DirectoryModel, MimeCategory, SortKey};
 use crate::navigation::NavigationModel;
 
 #[derive(Debug)]
@@ -20,6 +20,7 @@ pub struct TabState {
     pub dir_monitor: RefCell<Option<gio::FileMonitor>>,
     pub sort_key: SortKey,
     pub sort_reversed: bool,
+    pub filter_category: Cell<MimeCategory>,
     pub status_bar: gtk4::Label,
     pub load_gen: Cell<u64>,
 }
@@ -96,6 +97,7 @@ impl TabState {
             dir_monitor: RefCell::new(None),
             sort_key: SortKey::Name,
             sort_reversed: false,
+            filter_category: Cell::new(MimeCategory::All),
             status_bar,
             load_gen: Cell::new(0),
         }

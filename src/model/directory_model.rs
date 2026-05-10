@@ -46,10 +46,81 @@ impl SortKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MimeCategory {
+    #[default]
+    All,
+    Images,
+    Videos,
+    Audio,
+    Documents,
+    Archives,
+}
+
+impl MimeCategory {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "images" => Self::Images,
+            "videos" => Self::Videos,
+            "audio" => Self::Audio,
+            "documents" => Self::Documents,
+            "archives" => Self::Archives,
+            _ => Self::All,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Images => "images",
+            Self::Videos => "videos",
+            Self::Audio => "audio",
+            Self::Documents => "documents",
+            Self::Archives => "archives",
+        }
+    }
+
+    /// Match a content-type string against this category. `All` always
+    /// matches. Empty/missing content-types match nothing except `All`.
+    pub fn matches(self, content_type: &str) -> bool {
+        if matches!(self, Self::All) {
+            return true;
+        }
+        if content_type.is_empty() {
+            return false;
+        }
+        match self {
+            Self::All => true,
+            Self::Images => content_type.starts_with("image/"),
+            Self::Videos => content_type.starts_with("video/"),
+            Self::Audio => content_type.starts_with("audio/"),
+            Self::Documents => {
+                content_type.starts_with("text/")
+                    || content_type == "application/pdf"
+                    || content_type == "application/rtf"
+                    || content_type == "application/msword"
+                    || content_type
+                        .starts_with("application/vnd.openxmlformats-officedocument.")
+                    || content_type.starts_with("application/vnd.oasis.opendocument.")
+            }
+            Self::Archives => matches!(
+                content_type,
+                "application/zip"
+                    | "application/x-tar"
+                    | "application/gzip"
+                    | "application/x-7z-compressed"
+                    | "application/x-bzip2"
+                    | "application/zstd"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct FilterState {
     search: String,
     show_hidden: bool,
+    category: MimeCategory,
 }
 
 #[derive(Debug, Default)]
@@ -84,6 +155,13 @@ impl DirectoryModel {
                 let file_obj = obj.downcast_ref::<FileObject>().unwrap();
                 if !state.show_hidden && file_obj.name().starts_with('.') {
                     return false;
+                }
+                // Mime category: directories always pass through so the
+                // user can keep navigating. Files must match the category.
+                if !matches!(state.category, MimeCategory::All) && !file_obj.is_directory() {
+                    if !state.category.matches(&file_obj.content_type()) {
+                        return false;
+                    }
                 }
                 if state.search.is_empty() {
                     return true;
@@ -150,6 +228,14 @@ impl DirectoryModel {
             let mut state = self.filter_state.borrow_mut();
             state.search = search.to_lowercase();
             state.show_hidden = show_hidden;
+        }
+        self.filter.changed(gtk4::FilterChange::Different);
+    }
+
+    pub fn set_category(&self, category: MimeCategory) {
+        {
+            let mut state = self.filter_state.borrow_mut();
+            state.category = category;
         }
         self.filter.changed(gtk4::FilterChange::Different);
     }
