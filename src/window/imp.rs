@@ -736,7 +736,6 @@ impl ObjectImpl for WrenWindow {
         obj.add_controller(mouse_nav);
 
         obj.setup_search();
-        obj.setup_volume_monitor();
         // Now that the sidebar is rooted in the window we can render the
         // Recent section pulled from settings; populate_places ran during
         // template construction when `self.root()` was still None.

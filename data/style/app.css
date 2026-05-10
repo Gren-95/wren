@@ -202,3 +202,22 @@ button.wren-sidebar-toggle:hover {
    of nautilus-location-entry.c). The completion popup uses GTK's
    default styling — no custom CSS needed here. */
 
+/* ── Sidebar volume rows ──────────────────────────────────────────────────
+   Unmounted volumes are shown dimmed; clicking mounts them. Eject button
+   sits on the trailing edge of mounted-volume rows. */
+.wren-volume-unmounted {
+  color: alpha(currentColor, 0.55);
+}
+
+button.wren-volume-eject {
+  min-width: 0;
+  min-height: 0;
+  padding: 2px;
+  border-radius: 9999px;
+  -gtk-icon-size: 14px;
+}
+
+button.wren-volume-eject:hover {
+  background-color: alpha(currentColor, 0.12);
+}
+

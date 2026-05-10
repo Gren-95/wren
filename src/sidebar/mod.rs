@@ -114,6 +114,10 @@ impl WrenSidebar {
                 let uri = sidebar.imp().place_uris.borrow().get(idx).cloned();
                 if let Some(uri) = uri {
                     if uri.is_empty() {
+                        // Unmounted volume rows carry an attached gio::Volume.
+                        if let Some(volume) = Self::volume_for_row(row) {
+                            Self::trigger_mount(row, &volume);
+                        }
                         return;
                     }
                     if let Some(win) = row
@@ -272,27 +276,373 @@ impl WrenSidebar {
         let list = &imp.list_box;
         let monitor = gio::VolumeMonitor::get();
         let mounts: Vec<gio::Mount> = monitor.mounts();
+        let volumes: Vec<gio::Volume> = monitor.volumes();
 
-        if !mounts.is_empty() {
-            list.append(&Self::build_header_row("Devices"));
+        // Volumes that are present but have no mount yet — mountable by click.
+        let unmounted: Vec<gio::Volume> = volumes
+            .into_iter()
+            .filter(|v| v.get_mount().is_none())
+            .collect();
+
+        if mounts.is_empty() && unmounted.is_empty() {
+            return;
+        }
+
+        list.append(&Self::build_header_row("Devices"));
+        imp.place_uris.borrow_mut().push(String::new());
+
+        // Mounted devices first.
+        for mount in &mounts {
+            let name = mount.name().to_string();
+            let icon_name = mount
+                .icon()
+                .downcast::<gio::ThemedIcon>()
+                .ok()
+                .and_then(|ti| ti.names().into_iter().next())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "drive-harddisk-symbolic".to_string());
+            let uri = mount.root().uri().to_string();
+            let row = Self::build_volume_row(&name, &icon_name, false);
+            Self::attach_volume_eject_button(&row, mount);
+            Self::attach_volume_context_menu(&row, Some(mount.clone()), None);
+            Self::attach_drop_target(&row, &uri);
+            list.append(&row);
+            imp.place_uris.borrow_mut().push(uri);
+        }
+
+        // Unmounted volumes — clicking activates them via mount_future.
+        for volume in &unmounted {
+            let name = volume.name().to_string();
+            let icon_name = volume
+                .icon()
+                .downcast::<gio::ThemedIcon>()
+                .ok()
+                .and_then(|ti| ti.names().into_iter().next())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "drive-removable-media-symbolic".to_string());
+            let row = Self::build_volume_row(&name, &icon_name, true);
+            Self::attach_volume_context_menu(&row, None, Some(volume.clone()));
+            list.append(&row);
+            // Empty URI = handled specially by row_activated; we still need
+            // an entry so indices line up with list rows.
             imp.place_uris.borrow_mut().push(String::new());
-            for mount in &mounts {
-                let name = mount.name().to_string();
-                let icon_name = mount
-                    .icon()
-                    .downcast::<gio::ThemedIcon>()
-                    .ok()
-                    .and_then(|ti| ti.names().into_iter().next())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "drive-harddisk-symbolic".to_string());
-                let uri = mount.root().uri().to_string();
-                let row = Self::build_place_row(&name, &icon_name);
-                Self::attach_sidebar_context_menu(&row, &uri, false);
-                Self::attach_drop_target(&row, &uri);
-                list.append(&row);
-                imp.place_uris.borrow_mut().push(uri);
+
+            // Stash the gio::Volume on the row so the activation handler
+            // can pick it back up (we're using the qdata escape hatch
+            // because place_uris is an index→uri map only).
+            unsafe {
+                row.set_data::<gio::Volume>("wren-volume", volume.clone());
             }
         }
+    }
+
+    /// Connect to gio::VolumeMonitor signals so devices appearing or
+    /// disappearing trigger an automatic sidebar refresh.
+    pub(crate) fn connect_volume_monitor(&self) {
+        let imp = self.imp();
+        let monitor = gio::VolumeMonitor::get();
+        let mut handlers = imp.volume_monitor_handlers.borrow_mut();
+        if !handlers.is_empty() {
+            return;
+        }
+
+        let h1 = monitor.connect_mount_added(glib::clone!(
+            #[weak(rename_to = sidebar)]
+            self,
+            move |_, _| sidebar.reload_volumes()
+        ));
+        let h2 = monitor.connect_mount_removed(glib::clone!(
+            #[weak(rename_to = sidebar)]
+            self,
+            move |_, _| sidebar.reload_volumes()
+        ));
+        let h3 = monitor.connect_volume_added(glib::clone!(
+            #[weak(rename_to = sidebar)]
+            self,
+            move |_, _| sidebar.reload_volumes()
+        ));
+        let h4 = monitor.connect_volume_removed(glib::clone!(
+            #[weak(rename_to = sidebar)]
+            self,
+            move |_, _| sidebar.reload_volumes()
+        ));
+        handlers.extend([h1, h2, h3, h4]);
+    }
+
+    /// Find the row index for an unmounted-volume row that the user
+    /// activated. Used by the row_activated handler.
+    pub(crate) fn volume_for_row(row: &gtk4::ListBoxRow) -> Option<gio::Volume> {
+        unsafe { row.data::<gio::Volume>("wren-volume").map(|nn| nn.as_ref().clone()) }
+    }
+
+    /// Build a sidebar row that can host an inline eject button on the
+    /// trailing edge. Same layout as `build_place_row` but exposes the
+    /// inner `GtkBox` so callers can append controls.
+    fn build_volume_row(label: &str, icon_name: &str, dim_icon: bool) -> gtk4::ListBoxRow {
+        let row = gtk4::ListBoxRow::new();
+        let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        hbox.set_margin_top(6);
+        hbox.set_margin_bottom(6);
+        hbox.set_margin_start(8);
+        hbox.set_margin_end(8);
+
+        let icon = gtk4::Image::from_icon_name(icon_name);
+        icon.set_pixel_size(16);
+        if dim_icon {
+            icon.add_css_class("wren-volume-unmounted");
+        }
+
+        let lbl = gtk4::Label::new(Some(label));
+        lbl.set_xalign(0.0);
+        lbl.set_hexpand(true);
+        lbl.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        if dim_icon {
+            lbl.add_css_class("wren-volume-unmounted");
+        }
+
+        hbox.append(&icon);
+        hbox.append(&lbl);
+        row.set_child(Some(&hbox));
+        row
+    }
+
+    /// Add a `media-eject-symbolic` button to a mounted-volume row when
+    /// the mount supports unmount or eject. Click triggers eject (preferred)
+    /// or unmount, as appropriate.
+    fn attach_volume_eject_button(row: &gtk4::ListBoxRow, mount: &gio::Mount) {
+        let can_eject = mount.can_eject();
+        let can_unmount = mount.can_unmount();
+        if !can_eject && !can_unmount {
+            return;
+        }
+        let Some(hbox) = row.child().and_downcast::<gtk4::Box>() else {
+            return;
+        };
+
+        let btn = gtk4::Button::from_icon_name("media-eject-symbolic");
+        btn.set_valign(gtk4::Align::Center);
+        btn.add_css_class("flat");
+        btn.add_css_class("wren-volume-eject");
+        btn.set_tooltip_text(Some(if can_eject { "Eject" } else { "Unmount" }));
+
+        let mount_clone = mount.clone();
+        let prefer_eject = can_eject;
+        btn.connect_clicked(glib::clone!(
+            #[weak]
+            row,
+            move |_| {
+                Self::trigger_unmount_or_eject(&row, &mount_clone, prefer_eject);
+            }
+        ));
+        hbox.append(&btn);
+    }
+
+    /// Build a context menu for a volume row. Either a mounted volume
+    /// (`mount` is Some) or a present-but-unmounted volume (`volume` is Some).
+    fn attach_volume_context_menu(
+        row: &gtk4::ListBoxRow,
+        mount: Option<gio::Mount>,
+        volume: Option<gio::Volume>,
+    ) {
+        let menu = gio::Menu::new();
+        let actions = gio::SimpleActionGroup::new();
+
+        if let Some(mount) = mount.as_ref() {
+            let uri = mount.root().uri().to_string();
+
+            let open_section = gio::Menu::new();
+            let item = gio::MenuItem::new(Some("Open in New Tab"), None);
+            item.set_action_and_target_value(
+                Some("win.open-tab-at"),
+                Some(&uri.to_variant()),
+            );
+            open_section.append_item(&item);
+            let item = gio::MenuItem::new(Some("Open in New Window"), None);
+            item.set_action_and_target_value(
+                Some("win.open-window-at"),
+                Some(&uri.to_variant()),
+            );
+            open_section.append_item(&item);
+            menu.append_section(None, &open_section);
+
+            let info_section = gio::Menu::new();
+            let item = gio::MenuItem::new(Some("Copy Location"), None);
+            item.set_action_and_target_value(
+                Some("win.copy-path-at"),
+                Some(&uri.to_variant()),
+            );
+            info_section.append_item(&item);
+            menu.append_section(None, &info_section);
+
+            let device_section = gio::Menu::new();
+            if mount.can_unmount() {
+                device_section.append(Some("Unmount"), Some("volume.unmount"));
+                let unmount = gio::SimpleAction::new("unmount", None);
+                let mount_clone = mount.clone();
+                unmount.connect_activate(glib::clone!(
+                    #[weak]
+                    row,
+                    move |_, _| {
+                        Self::trigger_unmount_or_eject(&row, &mount_clone, false);
+                    }
+                ));
+                actions.add_action(&unmount);
+            }
+            if mount.can_eject() {
+                device_section.append(Some("Eject"), Some("volume.eject"));
+                let eject = gio::SimpleAction::new("eject", None);
+                let mount_clone = mount.clone();
+                eject.connect_activate(glib::clone!(
+                    #[weak]
+                    row,
+                    move |_, _| {
+                        Self::trigger_unmount_or_eject(&row, &mount_clone, true);
+                    }
+                ));
+                actions.add_action(&eject);
+            }
+            menu.append_section(None, &device_section);
+        }
+
+        if let Some(volume) = volume.as_ref() {
+            let device_section = gio::Menu::new();
+            device_section.append(Some("Mount"), Some("volume.mount"));
+            let mount_act = gio::SimpleAction::new("mount", None);
+            let volume_clone = volume.clone();
+            mount_act.connect_activate(glib::clone!(
+                #[weak]
+                row,
+                move |_, _| {
+                    Self::trigger_mount(&row, &volume_clone);
+                }
+            ));
+            actions.add_action(&mount_act);
+
+            if volume.can_eject() {
+                device_section.append(Some("Eject"), Some("volume.eject"));
+                let eject = gio::SimpleAction::new("eject", None);
+                let volume_clone = volume.clone();
+                eject.connect_activate(glib::clone!(
+                    #[weak]
+                    row,
+                    move |_, _| {
+                        Self::trigger_volume_eject(&row, &volume_clone);
+                    }
+                ));
+                actions.add_action(&eject);
+            }
+            menu.append_section(None, &device_section);
+        }
+
+        row.insert_action_group("volume", Some(&actions));
+
+        let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+        popover.set_has_arrow(false);
+        popover.set_parent(row);
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(3);
+        gesture.connect_pressed(move |_, _, x, y| {
+            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+                x as i32, y as i32, 1, 1,
+            )));
+            popover.popup();
+        });
+        row.add_controller(gesture);
+    }
+
+    /// Run `mount.eject_with_operation_future` (preferred) or
+    /// `mount.unmount_with_operation_future`. On success, navigate any
+    /// tab currently inside the unmounted root back to home.
+    fn trigger_unmount_or_eject(row: &gtk4::ListBoxRow, mount: &gio::Mount, prefer_eject: bool) {
+        let mount = mount.clone();
+        let win = row
+            .root()
+            .and_downcast::<crate::window::WrenWindow>();
+        let root = mount.root();
+        let op = gio::MountOperation::new();
+        let prefer_eject = prefer_eject && mount.can_eject();
+        glib::spawn_future_local(async move {
+            let result = if prefer_eject {
+                mount
+                    .eject_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
+                    .await
+            } else {
+                mount
+                    .unmount_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
+                    .await
+            };
+            if let Some(win) = win {
+                match result {
+                    Ok(()) => {
+                        let navigated = win.leave_unmounted_root(&root);
+                        let action = if prefer_eject { "Ejected" } else { "Unmounted" };
+                        if navigated {
+                            win.show_toast(&format!("{action}; navigated to Home"));
+                        } else {
+                            win.show_toast(action);
+                        }
+                    }
+                    Err(e) => {
+                        let action = if prefer_eject { "eject" } else { "unmount" };
+                        win.show_toast(&format!("Could not {action}: {e}"));
+                    }
+                }
+            }
+        });
+    }
+
+    /// Mount an unmounted volume. On success, navigate the active tab
+    /// into its newly-attached root.
+    fn trigger_mount(row: &gtk4::ListBoxRow, volume: &gio::Volume) {
+        let volume = volume.clone();
+        let win = row
+            .root()
+            .and_downcast::<crate::window::WrenWindow>();
+        let op = gio::MountOperation::new();
+        glib::spawn_future_local(async move {
+            match volume
+                .mount_future(gio::MountMountFlags::NONE, Some(&op))
+                .await
+            {
+                Ok(()) => {
+                    if let (Some(win), Some(mount)) = (win, volume.get_mount()) {
+                        win.navigate_to(mount.root());
+                    }
+                }
+                Err(e) => {
+                    if let Some(win) = win {
+                        win.show_toast(&format!("Could not mount: {e}"));
+                    }
+                }
+            }
+        });
+    }
+
+    /// Eject a volume that has no current mount (some optical/removable
+    /// devices expose eject directly on the volume).
+    fn trigger_volume_eject(row: &gtk4::ListBoxRow, volume: &gio::Volume) {
+        let volume = volume.clone();
+        let win = row
+            .root()
+            .and_downcast::<crate::window::WrenWindow>();
+        let op = gio::MountOperation::new();
+        glib::spawn_future_local(async move {
+            match volume
+                .eject_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
+                .await
+            {
+                Ok(()) => {
+                    if let Some(win) = win {
+                        win.show_toast("Ejected");
+                    }
+                }
+                Err(e) => {
+                    if let Some(win) = win {
+                        win.show_toast(&format!("Could not eject: {e}"));
+                    }
+                }
+            }
+        });
     }
 
     /// Re-read bookmarks and volumes, rebuilding all dynamic sidebar rows.
