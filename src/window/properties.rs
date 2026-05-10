@@ -563,96 +563,10 @@ fn populate_perms_page(
     target: &gio::File,
     info: &gio::FileInfo,
     is_directory: bool,
-    original_name: &str,
+    _original_name: &str,
     page: &adw::PreferencesPage,
     cancel: &gio::Cancellable,
 ) {
-    // ── Name group (rename also lives here so the user doesn't need to
-    //    flip back to the General page).
-    let name_group = adw::PreferencesGroup::new();
-    name_group.set_title("Name");
-    let name_row = adw::EntryRow::new();
-    name_row.set_title("Filename");
-    name_row.set_text(original_name);
-    let name_orig = Rc::new(RefCell::new(original_name.to_string()));
-    let name_target = target.clone();
-    name_row.connect_apply(clone!(
-        #[weak(rename_to = window)]
-        win,
-        #[strong] name_orig,
-        #[strong] name_target,
-        move |row| {
-            let new_name = row.text().to_string();
-            let mut orig = name_orig.borrow_mut();
-            if new_name == *orig || new_name.is_empty() {
-                if new_name.is_empty() { row.set_text(&orig); }
-                return;
-            }
-            let old = orig.clone();
-            *orig = new_name.clone();
-            drop(orig);
-            window.spawn_properties_rename(name_target.clone(), old, new_name);
-        }
-    ));
-    name_group.add(&name_row);
-    page.add(&name_group);
-
-    // Mode bits — bail if not present (non-local backend).
-    // unix::mode is queried as uint32. The attribute is missing on
-    // backends that don't expose POSIX permissions (smb://, mtp://);
-    // attribute_uint32 returns 0 in that case which would render every
-    // checkbox unchecked — distinguish by checking the attribute exists.
-    if !info.has_attribute("unix::mode") {
-        let placeholder = adw::PreferencesGroup::new();
-        add_perms_unavailable_row(&placeholder, "POSIX permissions not available for this location");
-        page.add(&placeholder);
-        return;
-    }
-    let mode = info.attribute_uint32("unix::mode");
-    let owner_uid = info.attribute_uint32("unix::uid");
-
-    // Read-only when the running user isn't the owner. (Even root edits
-    // through this dialog feel risky — keep escalation out of v1.)
-    let current_uid = current_user_uid();
-    let editable = current_uid.map_or(false, |u| u == owner_uid);
-
-    let mode_state = Rc::new(Cell::new(mode));
-    // Observers fire whenever any control mutates mode_state — used by
-    // the live-updating Octal / Symbolic mode rows in the Details group.
-    let mode_observers: Rc<RefCell<Vec<Box<dyn Fn(u32)>>>> = Rc::new(RefCell::new(Vec::new()));
-
-    // ── Execution group — chmod +x equivalent, prominent at top.
-    if !is_directory {
-        let exec_group = adw::PreferencesGroup::new();
-        exec_group.set_title("Execution");
-        exec_group.set_description(Some(
-            "When on, the file runs as a program when activated (chmod +x)",
-        ));
-        let exec_row = adw::SwitchRow::new();
-        exec_row.set_title("Executable");
-        exec_row.set_subtitle("Sets the execute bit for everyone");
-        exec_row.set_active(mode & 0o111 != 0);
-        exec_row.set_sensitive(editable);
-        let mode_state_for_exec = mode_state.clone();
-        let observers_for_exec = mode_observers.clone();
-        let target_clone = target.clone();
-        let cancel_clone = cancel.clone();
-        exec_row.connect_active_notify(clone!(
-            #[weak(rename_to = window)]
-            win,
-            move |row| {
-                let mut m = mode_state_for_exec.get();
-                if row.is_active() { m |= 0o111; } else { m &= !0o111; }
-                mode_state_for_exec.set(m);
-                for cb in observers_for_exec.borrow().iter() { cb(m); }
-                spawn_set_mode(&window, target_clone.clone(), m, cancel_clone.clone());
-            }
-        ));
-        exec_group.add(&exec_row);
-        page.add(&exec_group);
-    }
-
-    // ── Permissions group — owner/group/SELinux + r/w/x triplets.
     let perms_group = adw::PreferencesGroup::new();
     perms_group.set_title("Permissions");
 
@@ -668,7 +582,7 @@ fn populate_perms_page(
 
     let owner_row = adw::ActionRow::new();
     owner_row.set_title("Owner");
-    let owner_label = gtk4::Label::new(Some(&format!("{owner} ({owner_uid})")));
+    let owner_label = gtk4::Label::new(Some(&owner));
     owner_label.add_css_class("dim-label");
     owner_label.set_selectable(true);
     owner_row.add_suffix(&owner_label);
@@ -676,8 +590,7 @@ fn populate_perms_page(
 
     let group_row = adw::ActionRow::new();
     group_row.set_title("Group");
-    let gid = info.attribute_uint32("unix::gid");
-    let group_label = gtk4::Label::new(Some(&format!("{group_name} ({gid})")));
+    let group_label = gtk4::Label::new(Some(&group_name));
     group_label.add_css_class("dim-label");
     group_label.set_selectable(true);
     group_row.add_suffix(&group_label);
@@ -695,21 +608,54 @@ fn populate_perms_page(
         perms_group.add(&ctx_row);
     }
 
-    add_perm_triplet_row(
-        &perms_group, "Owner Permissions",
-        &mode_state, &mode_observers, target, cancel,
+    if !info.has_attribute("unix::mode") {
+        add_perms_unavailable_row(&perms_group, "POSIX permissions not available for this location");
+        page.add(&perms_group);
+        return;
+    }
+    let mode = info.attribute_uint32("unix::mode");
+    let owner_uid = info.attribute_uint32("unix::uid");
+    let current_uid = current_user_uid();
+    let editable = current_uid.map_or(false, |u| u == owner_uid);
+
+    let mode_state = Rc::new(Cell::new(mode));
+
+    add_access_combo_row(
+        &perms_group, "Owner Access",
+        &mode_state, target, cancel,
         editable, is_directory, 0o400, 0o200, 0o100,
     );
-    add_perm_triplet_row(
-        &perms_group, "Group Permissions",
-        &mode_state, &mode_observers, target, cancel,
+    add_access_combo_row(
+        &perms_group, "Group Access",
+        &mode_state, target, cancel,
         editable, is_directory, 0o040, 0o020, 0o010,
     );
-    add_perm_triplet_row(
-        &perms_group, "Others Permissions",
-        &mode_state, &mode_observers, target, cancel,
+    add_access_combo_row(
+        &perms_group, "Others Access",
+        &mode_state, target, cancel,
         editable, is_directory, 0o004, 0o002, 0o001,
     );
+
+    if !is_directory {
+        let exec_row = adw::SwitchRow::new();
+        exec_row.set_title("Allow Executing As Program");
+        exec_row.set_active(mode & 0o111 != 0);
+        exec_row.set_sensitive(editable);
+        let mode_state_for_exec = mode_state.clone();
+        let target_clone = target.clone();
+        let cancel_clone = cancel.clone();
+        exec_row.connect_active_notify(clone!(
+            #[weak(rename_to = window)]
+            win,
+            move |row| {
+                let mut m = mode_state_for_exec.get();
+                if row.is_active() { m |= 0o111; } else { m &= !0o111; }
+                mode_state_for_exec.set(m);
+                spawn_set_mode(&window, target_clone.clone(), m, cancel_clone.clone());
+            }
+        ));
+        perms_group.add(&exec_row);
+    }
 
     if !editable {
         let warn = adw::ActionRow::new();
@@ -717,110 +663,15 @@ fn populate_perms_page(
         warn.set_subtitle("You are not the owner of this file");
         perms_group.add(&warn);
     }
+
     page.add(&perms_group);
-
-    // ── Details group — live-updating octal/symbolic mode + extras.
-    let details_group = adw::PreferencesGroup::new();
-    details_group.set_title("Details");
-
-    let octal_row = adw::ActionRow::new();
-    octal_row.set_title("Octal mode");
-    let octal_label = gtk4::Label::new(Some(&format!("{:04o}", mode & 0o7777)));
-    octal_label.add_css_class("dim-label");
-    octal_label.add_css_class("monospace");
-    octal_label.set_selectable(true);
-    octal_row.add_suffix(&octal_label);
-    details_group.add(&octal_row);
-    {
-        let label = octal_label.clone();
-        mode_observers.borrow_mut().push(Box::new(move |m| {
-            label.set_text(&format!("{:04o}", m & 0o7777));
-        }));
-    }
-
-    let sym_row = adw::ActionRow::new();
-    sym_row.set_title("Symbolic mode");
-    let sym_label = gtk4::Label::new(Some(&format_symbolic_mode(mode)));
-    sym_label.add_css_class("dim-label");
-    sym_label.add_css_class("monospace");
-    sym_label.set_selectable(true);
-    sym_row.add_suffix(&sym_label);
-    details_group.add(&sym_row);
-    {
-        let label = sym_label.clone();
-        mode_observers.borrow_mut().push(Box::new(move |m| {
-            label.set_text(&format_symbolic_mode(m));
-        }));
-    }
-
-    if info.has_attribute("unix::inode") {
-        add_dim_row(&details_group, "Inode", &info.attribute_uint64("unix::inode").to_string());
-    }
-    if info.has_attribute("unix::nlink") {
-        add_dim_row(&details_group, "Hard links", &info.attribute_uint32("unix::nlink").to_string());
-    }
-    if info.has_attribute("unix::block-size") && info.has_attribute("unix::blocks") {
-        let bs = info.attribute_uint32("unix::block-size") as u64;
-        let blocks = info.attribute_uint64("unix::blocks");
-        add_dim_row(
-            &details_group,
-            "Allocated",
-            &format!("{} blocks · {} bytes", blocks, blocks * bs),
-        );
-    }
-    if info.has_attribute("unix::device") {
-        add_dim_row(&details_group, "Device", &format!("{}", info.attribute_uint32("unix::device")));
-    }
-    if info.is_symlink() {
-        if let Some(targ) = info.symlink_target() {
-            add_dim_row(&details_group, "Symlink target", &targ.to_string_lossy());
-        }
-    }
-    let uri = target.uri();
-    if !uri.is_empty() {
-        add_dim_row(&details_group, "URI", uri.as_str());
-    }
-
-    page.add(&details_group);
-}
-
-fn add_dim_row(group: &adw::PreferencesGroup, title: &str, value: &str) {
-    let row = adw::ActionRow::new();
-    row.set_title(title);
-    let label = gtk4::Label::new(Some(value));
-    label.add_css_class("dim-label");
-    label.set_selectable(true);
-    label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-    label.set_max_width_chars(48);
-    row.add_suffix(&label);
-    group.add(&row);
-}
-
-fn format_symbolic_mode(mode: u32) -> String {
-    let bit = |b: u32| mode & b != 0;
-    let triplet = |out: &mut String, r: u32, w: u32, x: u32, sp: u32, sl: char, su: char| {
-        out.push(if bit(r) { 'r' } else { '-' });
-        out.push(if bit(w) { 'w' } else { '-' });
-        out.push(match (bit(x), bit(sp)) {
-            (true, true) => sl,
-            (false, true) => su,
-            (true, false) => 'x',
-            (false, false) => '-',
-        });
-    };
-    let mut out = String::with_capacity(9);
-    triplet(&mut out, 0o400, 0o200, 0o100, 0o4000, 's', 'S');
-    triplet(&mut out, 0o040, 0o020, 0o010, 0o2000, 's', 'S');
-    triplet(&mut out, 0o004, 0o002, 0o001, 0o1000, 't', 'T');
-    out
 }
 
 #[allow(clippy::too_many_arguments)]
-fn add_perm_triplet_row(
+fn add_access_combo_row(
     group: &adw::PreferencesGroup,
     title: &str,
     mode_state: &Rc<Cell<u32>>,
-    observers: &Rc<RefCell<Vec<Box<dyn Fn(u32)>>>>,
     target: &gio::File,
     cancel: &gio::Cancellable,
     editable: bool,
@@ -829,67 +680,77 @@ fn add_perm_triplet_row(
     w_bit: u32,
     x_bit: u32,
 ) {
-    let row = adw::ActionRow::new();
+    // Nautilus's three-way (file) / four-way (dir) access combo. The bits
+    // are stuffed into a packed (r,w,x) tuple so the same predicate works
+    // regardless of which triplet (owner / group / others) we're driving.
+    let labels: &[&str] = if is_directory {
+        &["None", "List files only", "Access files", "Create and delete files"]
+    } else {
+        &["None", "Read-only", "Read and write"]
+    };
+    let model = gtk4::StringList::new(labels);
+    let row = adw::ComboRow::new();
     row.set_title(title);
+    row.set_model(Some(&model));
+    row.set_sensitive(editable);
 
-    let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-    hbox.set_valign(gtk4::Align::Center);
-
-    let make_check = |label: &str, bit: u32| -> gtk4::CheckButton {
-        let cb = gtk4::CheckButton::with_label(label);
-        cb.set_active(mode_state.get() & bit != 0);
-        cb.set_sensitive(editable);
-        cb
+    let mode = mode_state.get();
+    let r = mode & r_bit != 0;
+    let w = mode & w_bit != 0;
+    let x = mode & x_bit != 0;
+    let initial = if is_directory {
+        match (r, w, x) {
+            (false, _, _) => 0,                 // None
+            (true, false, false) => 1,          // List files only
+            (true, false, true) => 2,           // Access files
+            (true, true, _) => 3,               // Create and delete (also matches w+x)
+        }
+    } else {
+        match (r, w) {
+            (false, _) => 0,            // None
+            (true, false) => 1,         // Read-only
+            (true, true) => 2,          // Read and write
+        }
     };
+    row.set_selected(initial as u32);
 
-    let r = make_check("Read", r_bit);
-    let w = make_check("Write", w_bit);
-    // For directories, "Execute" really means "search" — i.e. allowed to
-    // descend into the dir. Label accordingly so it's not confusing.
-    let x_label = if is_directory { "Access" } else { "Execute" };
-    let x = make_check(x_label, x_bit);
-
-    let on_toggle = |bit: u32, cb: &gtk4::CheckButton| {
-        let mode_state = mode_state.clone();
-        let observers = observers.clone();
-        let target = target.clone();
-        let cancel = cancel.clone();
-        cb.connect_toggled(move |cb| {
-            let mut m = mode_state.get();
-            if cb.is_active() {
-                m |= bit;
-            } else {
-                m &= !bit;
+    let mode_state = mode_state.clone();
+    let target = target.clone();
+    let cancel = cancel.clone();
+    row.connect_selected_notify(move |row| {
+        let idx = row.selected();
+        let mut m = mode_state.get();
+        m &= !(r_bit | w_bit | x_bit);
+        if is_directory {
+            match idx {
+                0 => {}
+                1 => m |= r_bit,                            // List files only (r)
+                2 => m |= r_bit | x_bit,                    // Access files (r+x)
+                _ => m |= r_bit | w_bit | x_bit,            // Create and delete (rwx)
             }
-            mode_state.set(m);
-            for cb in observers.borrow().iter() { cb(m); }
-            // We don't have a window handle here, but spawn_set_mode
-            // doesn't strictly need one — toast suppression on failure
-            // is acceptable for the perms triplet.
-            let target_clone = target.clone();
-            let cancel_clone = cancel.clone();
-            glib::spawn_future_local(async move {
-                let info = gio::FileInfo::new();
-                info.set_attribute_uint32("unix::mode", m);
-                let _ = target_clone
-                    .set_attributes_future(
-                        &info,
-                        gio::FileQueryInfoFlags::NONE,
-                        glib::Priority::DEFAULT,
-                    )
-                    .await;
-                if cancel_clone.is_cancelled() { /* dialog gone */ }
-            });
+        } else {
+            match idx {
+                0 => {}
+                1 => m |= r_bit,                            // Read-only (r)
+                _ => m |= r_bit | w_bit,                    // Read and write (rw)
+            }
+        }
+        mode_state.set(m);
+        let target_clone = target.clone();
+        let cancel_clone = cancel.clone();
+        glib::spawn_future_local(async move {
+            let info = gio::FileInfo::new();
+            info.set_attribute_uint32("unix::mode", m);
+            let _ = target_clone
+                .set_attributes_future(
+                    &info,
+                    gio::FileQueryInfoFlags::NONE,
+                    glib::Priority::DEFAULT,
+                )
+                .await;
+            if cancel_clone.is_cancelled() { /* dialog gone */ }
         });
-    };
-    on_toggle(r_bit, &r);
-    on_toggle(w_bit, &w);
-    on_toggle(x_bit, &x);
-
-    hbox.append(&r);
-    hbox.append(&w);
-    hbox.append(&x);
-    row.add_suffix(&hbox);
+    });
     group.add(&row);
 }
 
