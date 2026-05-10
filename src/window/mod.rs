@@ -1105,15 +1105,14 @@ impl WrenWindow {
         // dir doesn't blow up the file_section's vertical extent. List
         // is rebuilt every right-click (see setup_context_menu) so
         // adding/removing templates while wren is open Just Works.
+        let app = self.application().and_downcast::<WrenApplication>();
+        let show_ext = app.as_ref().map_or(true, |a| a.show_extensions());
         let templates = templates::list_templates();
         if !templates.is_empty() {
             let templates_menu = gio::Menu::new();
             for (name, _path) in &templates {
-                let label = std::path::Path::new(name)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(name);
-                let item = gio::MenuItem::new(Some(label), None);
+                let label = template_label(name, show_ext);
+                let item = gio::MenuItem::new(Some(&label), None);
                 item.set_action_and_target_value(
                     Some("win.new-from-template"),
                     Some(&name.to_variant()),
@@ -1122,7 +1121,6 @@ impl WrenWindow {
             }
             file_section.append_submenu(Some("New Document"), &templates_menu);
         }
-        let app = self.application().and_downcast::<WrenApplication>();
         if app.as_ref().map_or(true, |a| a.show_duplicate()) {
             file_section.append(Some("Duplicate"), Some("win.duplicate"));
         }
@@ -1159,15 +1157,15 @@ impl WrenWindow {
     pub fn new_folder_split_menu() -> gio::MenuModel {
         let menu = gio::Menu::new();
         menu.append(Some("New Folder"), Some("win.new-folder"));
+        let show_ext = gio::Application::default()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.show_extensions());
         let templates = templates::list_templates();
         if !templates.is_empty() {
             let templates_section = gio::Menu::new();
             for (name, _path) in &templates {
-                let label = std::path::Path::new(name)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(name);
-                let item = gio::MenuItem::new(Some(label), None);
+                let label = template_label(name, show_ext);
+                let item = gio::MenuItem::new(Some(&label), None);
                 item.set_action_and_target_value(
                     Some("win.new-from-template"),
                     Some(&name.to_variant()),
@@ -2067,34 +2065,54 @@ impl WrenWindow {
     pub fn open_settings(&self) {
         let dialog = adw::PreferencesDialog::new();
         dialog.set_title("Settings");
+        // AdwPreferencesDialog has a built-in search overlay (Ctrl+F)
+        // that walks PreferencesRow titles/descriptions across all pages.
+        dialog.set_search_enabled(true);
 
-        let general_page = adw::PreferencesPage::new();
-        general_page.set_title("General");
-        general_page.set_icon_name(Some("preferences-other-symbolic"));
+        let flat = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(false, |a| a.settings_flat());
 
-        let files_page = adw::PreferencesPage::new();
-        files_page.set_title("Files");
-        files_page.set_icon_name(Some("folder-symbolic"));
+        // In tabbed mode each section is its own PreferencesPage with an
+        // icon, and AdwPreferencesDialog auto-renders the tab strip. In
+        // flat mode a single page is reused so all groups appear as one
+        // long scroll — like the dialog looked before tabs landed.
+        let (general_page, files_page, views_page, sidebar_page, performance_page, context_page, advanced_page) = if flat {
+            let single = adw::PreferencesPage::new();
+            single.set_title("Settings");
+            (single.clone(), single.clone(), single.clone(), single.clone(), single.clone(), single.clone(), single)
+        } else {
+            let general_page = adw::PreferencesPage::new();
+            general_page.set_title("General");
+            general_page.set_icon_name(Some("preferences-other-symbolic"));
 
-        let views_page = adw::PreferencesPage::new();
-        views_page.set_title("Views");
-        views_page.set_icon_name(Some("view-grid-symbolic"));
+            let files_page = adw::PreferencesPage::new();
+            files_page.set_title("Files");
+            files_page.set_icon_name(Some("folder-symbolic"));
 
-        let sidebar_page = adw::PreferencesPage::new();
-        sidebar_page.set_title("Sidebar");
-        sidebar_page.set_icon_name(Some("sidebar-show-symbolic"));
+            let views_page = adw::PreferencesPage::new();
+            views_page.set_title("Views");
+            views_page.set_icon_name(Some("view-grid-symbolic"));
 
-        let performance_page = adw::PreferencesPage::new();
-        performance_page.set_title("Performance");
-        performance_page.set_icon_name(Some("emblem-system-symbolic"));
+            let sidebar_page = adw::PreferencesPage::new();
+            sidebar_page.set_title("Sidebar");
+            sidebar_page.set_icon_name(Some("sidebar-show-symbolic"));
 
-        let context_page = adw::PreferencesPage::new();
-        context_page.set_title("Context Menu");
-        context_page.set_icon_name(Some("view-list-symbolic"));
+            let performance_page = adw::PreferencesPage::new();
+            performance_page.set_title("Performance");
+            performance_page.set_icon_name(Some("emblem-system-symbolic"));
 
-        let advanced_page = adw::PreferencesPage::new();
-        advanced_page.set_title("Advanced");
-        advanced_page.set_icon_name(Some("applications-engineering-symbolic"));
+            let context_page = adw::PreferencesPage::new();
+            context_page.set_title("Context Menu");
+            context_page.set_icon_name(Some("view-list-symbolic"));
+
+            let advanced_page = adw::PreferencesPage::new();
+            advanced_page.set_title("Advanced");
+            advanced_page.set_icon_name(Some("applications-engineering-symbolic"));
+
+            (general_page, files_page, views_page, sidebar_page, performance_page, context_page, advanced_page)
+        };
 
         // Appearance group
         let appearance_group = adw::PreferencesGroup::new();
@@ -2731,6 +2749,26 @@ impl WrenWindow {
             }
         ));
         advanced_group.add(&log_row);
+
+        // Layout toggle for the Settings dialog itself. Switching closes
+        // the current dialog and re-presents it in the other layout.
+        let flat_row = adw::SwitchRow::new();
+        flat_row.set_title("Show all settings in one column");
+        flat_row.set_subtitle("Replace the tab strip with a single scrolling page");
+        flat_row.set_active(flat);
+        flat_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            #[weak] dialog,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_settings_flat(row.is_active());
+                }
+                dialog.close();
+                window.open_settings();
+            }
+        ));
+        advanced_group.add(&flat_row);
         advanced_page.add(&advanced_group);
 
         // Single-click toggle — added to the existing Files page (its
@@ -2767,13 +2805,19 @@ impl WrenWindow {
         single_click_group.add(&single_click_row);
         files_page.add(&single_click_group);
 
-        dialog.add(&general_page);
-        dialog.add(&files_page);
-        dialog.add(&views_page);
-        dialog.add(&sidebar_page);
-        dialog.add(&performance_page);
-        dialog.add(&context_page);
-        dialog.add(&advanced_page);
+        if flat {
+            // All page variables are clones of the same single page;
+            // adding it once is enough.
+            dialog.add(&general_page);
+        } else {
+            dialog.add(&general_page);
+            dialog.add(&files_page);
+            dialog.add(&views_page);
+            dialog.add(&sidebar_page);
+            dialog.add(&performance_page);
+            dialog.add(&context_page);
+            dialog.add(&advanced_page);
+        }
         dialog.present(Some(self));
     }
 
@@ -3852,6 +3896,20 @@ impl WrenWindow {
 }
 
 // Look up a .desktop file by id (e.g. "ranger.desktop") in the
+// Display label for a template file. When show_extensions is on (or the
+// name is a dotfile, where Path::file_stem returns the whole name), keep
+// the full filename; otherwise strip from the LAST '.' onwards so multi-
+// part stems like "report.draft.docx" → "report.draft".
+fn template_label(name: &str, show_extensions: bool) -> String {
+    if show_extensions || name.starts_with('.') {
+        return name.to_string();
+    }
+    match name.rfind('.') {
+        Some(pos) if pos > 0 => name[..pos].to_string(),
+        _ => name.to_string(),
+    }
+}
+
 // standard XDG application directories. Returns the first match,
 // matching gio's own resolution order.
 fn locate_desktop_file(id: &str) -> Option<std::path::PathBuf> {

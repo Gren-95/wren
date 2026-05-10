@@ -194,6 +194,12 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn settings_flat(&self) -> bool { self.imp().settings_flat.get() }
+    pub fn set_settings_flat(&self, v: bool) {
+        self.imp().settings_flat.set(v);
+        self.imp().save_settings();
+    }
+
     pub fn notifications_enabled(&self) -> bool { self.imp().notifications_enabled.get() }
     pub fn set_notifications_enabled(&self, v: bool) {
         self.imp().notifications_enabled.set(v);

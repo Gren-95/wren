@@ -58,6 +58,7 @@ pub struct WrenApplication {
     /// Stored as one of `"run"`, `"view"`, `"ask"`. Defaults to `"ask"`.
     pub executable_text_action: RefCell<String>,
     pub single_click: Cell<bool>,
+    pub settings_flat: Cell<bool>,
 }
 
 impl Default for WrenApplication {
@@ -110,6 +111,7 @@ impl Default for WrenApplication {
             show_col_accessed: Cell::new(false),
             executable_text_action: RefCell::new("ask".to_string()),
             single_click: Cell::new(false),
+            settings_flat: Cell::new(false),
         }
     }
 }
@@ -323,6 +325,9 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("Files", "single_click") {
                 self.single_click.set(v);
             }
+            if let Ok(v) = kf.boolean("Settings", "flat") {
+                self.settings_flat.set(v);
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -372,6 +377,7 @@ impl WrenApplication {
         kf.set_boolean("Recents", "enabled", self.recents_enabled.get());
         kf.set_integer("Recents", "max", self.recents_cap.get() as i32);
         kf.set_boolean("Files", "single_click", self.single_click.get());
+        kf.set_boolean("Settings", "flat", self.settings_flat.get());
         kf.set_boolean("Notifications", "enabled", self.notifications_enabled.get());
         kf.set_string("Recents", "uris", &self.recent_uris.borrow().join("\t"));
         kf.set_integer(
