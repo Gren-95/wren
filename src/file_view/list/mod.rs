@@ -349,6 +349,38 @@ impl WrenFileList {
 
     fn popup_context_menu(&self, x: f64, y: f64) {
         let imp = imp::WrenFileList::from_obj(self);
+
+        // Right-click should select the row under the cursor when it's
+        // not part of the current multi-selection.
+        if let Some(picked) = self.pick(x, y, gtk4::PickFlags::DEFAULT) {
+            let mut w: Option<gtk4::Widget> = Some(picked);
+            while let Some(widget) = w {
+                if let Ok(row) = widget.clone().downcast::<WrenFileRow>() {
+                    if let Some(file_obj) = row.bound_file_object() {
+                        if let Some(model) = imp
+                            .list_view
+                            .model()
+                            .and_then(|m| m.downcast::<gtk4::MultiSelection>().ok())
+                        {
+                            let n = model.n_items();
+                            for i in 0..n {
+                                if let Some(o) = model.item(i).and_downcast::<FileObject>() {
+                                    if o.file().equal(file_obj.file()) {
+                                        if !model.selection().contains(i) {
+                                            model.select_item(i, true);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+                w = widget.parent();
+            }
+        }
+
         let model = match imp.context_menu_builder.borrow().as_ref() {
             Some(b) => b(),
             None => return,
