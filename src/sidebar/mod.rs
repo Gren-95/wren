@@ -640,19 +640,32 @@ impl WrenSidebar {
         let win = row
             .root()
             .and_downcast::<crate::window::WrenWindow>();
+        let sidebar_weak: glib::WeakRef<Self> = {
+            let mut p: Option<gtk4::Widget> = row.parent();
+            let mut found: Option<Self> = None;
+            while let Some(parent) = p {
+                if let Ok(s) = parent.clone().downcast::<Self>() {
+                    found = Some(s);
+                    break;
+                }
+                p = parent.parent();
+            }
+            found.map(|s| s.downgrade()).unwrap_or_default()
+        };
         let root = mount.root();
-        let op = gio::MountOperation::new();
         let prefer_eject = prefer_eject && mount.can_eject();
         glib::spawn_future_local(async move {
-            let result = if prefer_eject {
-                mount
-                    .eject_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
-                    .await
-            } else {
-                mount
-                    .unmount_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
-                    .await
-            };
+            // GVFS sometimes fails the first call with "Cache invalid,
+            // retry (internally handled)" — that's the daemon asking us
+            // to retry rather than a real failure. Try once more before
+            // surfacing it as an error.
+            let mut result = run_unmount(&mount, prefer_eject).await;
+            if let Err(ref e) = result {
+                if e.message().contains("Cache invalid, retry") {
+                    glib::timeout_future(std::time::Duration::from_millis(150)).await;
+                    result = run_unmount(&mount, prefer_eject).await;
+                }
+            }
             if let Some(win) = win {
                 match result {
                     Ok(()) => {
@@ -669,6 +682,13 @@ impl WrenSidebar {
                         win.show_toast(&format!("Could not {action}: {e}"));
                     }
                 }
+            }
+            // Force a sidebar refresh either way — the volume-monitor
+            // signal can lag behind GVFS's internally-handled retry,
+            // and if the mount is genuinely gone the row needs to
+            // disappear immediately.
+            if let Some(sidebar) = sidebar_weak.upgrade() {
+                sidebar.reload_volumes();
             }
         });
     }
@@ -867,6 +887,19 @@ impl WrenSidebar {
 
         row.set_child(Some(&lbl));
         row
+    }
+}
+
+async fn run_unmount(mount: &gio::Mount, prefer_eject: bool) -> Result<(), glib::Error> {
+    let op = gio::MountOperation::new();
+    if prefer_eject {
+        mount
+            .eject_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
+            .await
+    } else {
+        mount
+            .unmount_with_operation_future(gio::MountUnmountFlags::NONE, Some(&op))
+            .await
     }
 }
 

@@ -247,6 +247,22 @@ button.wren-sidebar-toggle:hover {
   font-style: italic;
 }
 
+/* Selection accent for the sidebar's navigation-sidebar list. The
+   default :selected on some themes (especially dark Adwaita variants
+   on the user's system) renders as a near-invisible 5%-alpha tint —
+   this bumps it to the standard accent pill so the active location
+   reads at a glance. */
+.navigation-sidebar > row:selected {
+  background-color: alpha(@accent_bg_color, 0.30);
+  color: @accent_color;
+}
+.navigation-sidebar > row:selected:hover {
+  background-color: alpha(@accent_bg_color, 0.40);
+}
+.navigation-sidebar > row:selected image {
+  color: @accent_color;
+}
+
 
 button.wren-volume-eject {
   min-width: 0;
