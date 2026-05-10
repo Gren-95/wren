@@ -42,8 +42,6 @@ pub struct WrenWindow {
     #[template_child]
     pub view_button: TemplateChild<gtk4::MenuButton>,
     #[template_child]
-    pub filter_button: TemplateChild<gtk4::MenuButton>,
-    #[template_child]
     pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
     #[template_child]
     pub op_button: TemplateChild<gtk4::MenuButton>,
@@ -92,7 +90,6 @@ impl Default for WrenWindow {
             sidebar_button: Default::default(),
             menu_button: Default::default(),
             view_button: Default::default(),
-            filter_button: Default::default(),
             breadcrumb_bar: Default::default(),
             op_button: Default::default(),
             banner: Default::default(),
@@ -533,20 +530,41 @@ impl ObjectImpl for WrenWindow {
             obj.add_action(&action);
         }
 
-        // View mode dropdown
+        // View dropdown — merged view-mode + mime-filter so the header
+        // bar stays compact (one button instead of two).
         let view_menu = gio::Menu::new();
+        let view_section = gio::Menu::new();
         let grid_item = gio::MenuItem::new(Some("Grid"), None);
         grid_item.set_action_and_target_value(
             Some("win.set-view-mode"),
             Some(&"grid".to_variant()),
         );
-        view_menu.append_item(&grid_item);
+        view_section.append_item(&grid_item);
         let list_item = gio::MenuItem::new(Some("List"), None);
         list_item.set_action_and_target_value(
             Some("win.set-view-mode"),
             Some(&"list".to_variant()),
         );
-        view_menu.append_item(&list_item);
+        view_section.append_item(&list_item);
+        view_menu.append_section(Some("View as"), &view_section);
+
+        let filter_section = gio::Menu::new();
+        for (label, key) in &[
+            ("All", "all"),
+            ("Images", "images"),
+            ("Videos", "videos"),
+            ("Audio", "audio"),
+            ("Documents", "documents"),
+            ("Archives", "archives"),
+        ] {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(
+                Some("win.set-mime-filter"),
+                Some(&key.to_variant()),
+            );
+            filter_section.append_item(&item);
+        }
+        view_menu.append_section(Some("Filter"), &filter_section);
         obj.imp().view_button.set_menu_model(Some(&view_menu));
 
         // Stateful view-mode action
@@ -570,25 +588,6 @@ impl ObjectImpl for WrenWindow {
             }
         ));
         obj.add_action(&view_mode_action);
-
-        // Mime-filter dropdown menu
-        let filter_menu = gio::Menu::new();
-        for (label, key) in &[
-            ("All", "all"),
-            ("Images", "images"),
-            ("Videos", "videos"),
-            ("Audio", "audio"),
-            ("Documents", "documents"),
-            ("Archives", "archives"),
-        ] {
-            let item = gio::MenuItem::new(Some(label), None);
-            item.set_action_and_target_value(
-                Some("win.set-mime-filter"),
-                Some(&key.to_variant()),
-            );
-            filter_menu.append_item(&item);
-        }
-        obj.imp().filter_button.set_menu_model(Some(&filter_menu));
 
         // Stateful mime-filter action
         let mime_filter_action = gio::SimpleAction::new_stateful(

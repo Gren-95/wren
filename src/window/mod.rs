@@ -962,20 +962,12 @@ impl WrenWindow {
         self.update_filter_button_indicator(category);
     }
 
-    /// Reflect the active mime-filter on the toolbar button: tinted with
-    /// `.has-active-filter` and a category-specific icon when not All,
-    /// neutral funnel icon otherwise.
+    /// Reflect the active mime-filter on the view-mode button (which now
+    /// hosts the filter menu too). Adds a `.has-active-filter` accent
+    /// when a non-All filter is active so the user can tell at a glance.
+    /// The button's icon stays driven by view-mode.
     fn update_filter_button_indicator(&self, category: MimeCategory) {
-        let btn = &self.imp().filter_button;
-        let icon = match category {
-            MimeCategory::All => "funnel-symbolic",
-            MimeCategory::Images => "image-x-generic-symbolic",
-            MimeCategory::Videos => "video-x-generic-symbolic",
-            MimeCategory::Audio => "audio-x-generic-symbolic",
-            MimeCategory::Documents => "x-office-document-symbolic",
-            MimeCategory::Archives => "package-x-generic-symbolic",
-        };
-        btn.set_icon_name(icon);
+        let btn = &self.imp().view_button;
         if matches!(category, MimeCategory::All) {
             btn.remove_css_class("has-active-filter");
         } else {
