@@ -218,6 +218,30 @@ impl WrenWindow {
     }
 
     pub fn new_tab(&self) {
+        let app = self.application().and_downcast::<WrenApplication>();
+        if let Some(app) = app.as_ref() {
+            if app.new_tab_use_defaults() {
+                let path = app.new_tab_default_path();
+                let location = if path.is_empty() {
+                    gio::File::for_path(glib::home_dir())
+                } else if path.contains("://") {
+                    gio::File::for_uri(&path)
+                } else {
+                    gio::File::for_path(&path)
+                };
+                let pref = TabPref {
+                    uri: location.uri().to_string(),
+                    sort_key: app.new_tab_default_sort_key(),
+                    reversed: app.new_tab_default_sort_reversed(),
+                    view_mode: app.new_tab_default_view(),
+                };
+                let zoom = app.new_tab_default_zoom().clamp(1, 5);
+                self.imp().zoom_level.set(zoom);
+                self.imp().zoom_adjustment.set_value(zoom as f64);
+                self.add_tab_with_state(location, Some(&pref));
+                return;
+            }
+        }
         self.add_tab(gio::File::for_path(glib::home_dir()));
     }
 
@@ -256,8 +280,7 @@ impl WrenWindow {
             window_title = tab
                 .navigation
                 .current()
-                .and_then(|loc| loc.basename())
-                .map(|p| p.to_string_lossy().into_owned())
+                .map(|loc| self.title_for_location(loc))
                 .unwrap_or_else(|| "Files".to_string());
             if let Some(loc) = tab.navigation.current() {
                 imp.breadcrumb_bar.set_location(loc);
@@ -327,6 +350,53 @@ impl WrenWindow {
             self.refresh_readonly_banner(idx, load_gen, loc);
         } else {
             self.hide_banner();
+        }
+    }
+
+    /// Render `location` as a window-title string. When the user has
+    /// "Show full path in title" enabled this returns the absolute path
+    /// (with `$HOME` collapsed to `~`) for `file://` URIs and the raw
+    /// URI for non-local locations; otherwise the basename only.
+    fn title_for_location(&self, location: &gio::File) -> String {
+        let full = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(false, |a| a.show_full_path_in_title());
+        if full {
+            if let Some(path) = location.path() {
+                let s = path.to_string_lossy().into_owned();
+                let home = glib::home_dir();
+                let home_s = home.to_string_lossy();
+                if !home_s.is_empty() && s == home_s.as_ref() {
+                    return "~".to_string();
+                }
+                if !home_s.is_empty() {
+                    let prefix = format!("{}/", home_s);
+                    if let Some(rest) = s.strip_prefix(&prefix) {
+                        return format!("~/{rest}");
+                    }
+                }
+                return s;
+            }
+            return location.uri().to_string();
+        }
+        location
+            .basename()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Files".to_string())
+    }
+
+    /// Re-apply `title_for_location` to the active tab. Used when the
+    /// "Show full path in title" pref toggles so the change is visible
+    /// immediately without re-navigating.
+    pub fn refresh_title(&self) {
+        let Some(idx) = self.current_tab_index() else { return };
+        let loc = {
+            let tabs = self.imp().tabs.borrow();
+            tabs.get(idx).and_then(|t| t.navigation.current().cloned())
+        };
+        if let Some(loc) = loc {
+            self.set_title(Some(&self.title_for_location(&loc)));
         }
     }
 
@@ -515,12 +585,12 @@ impl WrenWindow {
             let tabs = imp.tabs.borrow();
             if let Some(tab) = tabs.get(tab_idx) {
                 let page = imp.tab_view.page(&tab.content_widget);
-                let title = location
+                let tab_title = location
                     .basename()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "Files".to_string());
-                page.set_title(&title);
-                self.set_title(Some(&title));
+                page.set_title(&tab_title);
+                self.set_title(Some(&self.title_for_location(&location)));
             }
         }
 
@@ -1997,6 +2067,85 @@ impl WrenWindow {
         context_group.add(&copy_loc_row);
         page.add(&context_group);
 
+        // Window group
+        let window_group = adw::PreferencesGroup::new();
+        window_group.set_title("Window");
+
+        let full_path_row = adw::SwitchRow::new();
+        full_path_row.set_title("Show full path in title");
+        full_path_row.set_subtitle("Display the active tab's full filesystem path in the window title");
+        let initial_fp = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(false, |a| a.show_full_path_in_title());
+        full_path_row.set_active(initial_fp);
+        full_path_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_show_full_path_in_title(row.is_active());
+                }
+                window.refresh_title();
+            }
+        ));
+        window_group.add(&full_path_row);
+        page.add(&window_group);
+
+        // Files group (display options that affect every view)
+        let files_group = adw::PreferencesGroup::new();
+        files_group.set_title("Files");
+
+        let hidden_row = adw::SwitchRow::new();
+        hidden_row.set_title("Show hidden files");
+        hidden_row.set_subtitle("Display dotfiles and folders starting with a period");
+        let initial_hidden = self.imp().show_hidden.get();
+        hidden_row.set_active(initial_hidden);
+        hidden_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let v = row.is_active();
+                window.imp().show_hidden.set(v);
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_show_hidden(v);
+                }
+                if let Some(action) = window
+                    .lookup_action("toggle-hidden")
+                    .and_downcast::<gio::SimpleAction>()
+                {
+                    action.set_state(&v.to_variant());
+                }
+                window.apply_hidden_filter();
+            }
+        ));
+        files_group.add(&hidden_row);
+        page.add(&files_group);
+
+        // Trash group
+        let trash_group = adw::PreferencesGroup::new();
+        trash_group.set_title("Trash");
+
+        let confirm_trash_row = adw::SwitchRow::new();
+        confirm_trash_row.set_title("Confirm before moving to Trash");
+        confirm_trash_row.set_subtitle("Ask for confirmation when pressing Delete");
+        let initial_ct = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.confirm_move_to_trash());
+        confirm_trash_row.set_active(initial_ct);
+        confirm_trash_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_confirm_move_to_trash(row.is_active());
+                }
+            }
+        ));
+        trash_group.add(&confirm_trash_row);
+        page.add(&trash_group);
+
         // Sorting group
         let sorting_group = adw::PreferencesGroup::new();
         sorting_group.set_title("Sorting");
@@ -2021,6 +2170,9 @@ impl WrenWindow {
         ));
         sorting_group.add(&folders_first_row);
         page.add(&sorting_group);
+
+        // New Tab group
+        self.build_new_tab_settings_group(&page);
 
         // Sidebar group
         let sidebar_group = adw::PreferencesGroup::new();
@@ -2124,6 +2276,186 @@ impl WrenWindow {
 
         dialog.add(&page);
         dialog.present(Some(self));
+    }
+
+    /// Build the "New Tab" settings group (use-defaults toggle + per-default
+    /// rows). Split out of `open_settings` because it owns several inter-row
+    /// sensitivity links that would clutter the dispatch site.
+    fn build_new_tab_settings_group(&self, page: &adw::PreferencesPage) {
+        let app = self.application().and_downcast::<WrenApplication>();
+
+        let group = adw::PreferencesGroup::new();
+        group.set_title("New Tab");
+        group.set_description(Some(
+            "Override the folder, view, sort, and zoom Ctrl+T uses",
+        ));
+
+        let use_defaults = app.as_ref().map_or(false, |a| a.new_tab_use_defaults());
+
+        let use_row = adw::SwitchRow::new();
+        use_row.set_title("Use defaults for new tabs");
+        use_row.set_subtitle("When off, new tabs open the home folder with global view/sort");
+        use_row.set_active(use_defaults);
+
+        let path_row = adw::EntryRow::new();
+        path_row.set_title("Default folder");
+        let initial_path = app.as_ref().map_or(String::new(), |a| a.new_tab_default_path());
+        let display_path = if initial_path.is_empty() {
+            glib::home_dir().to_string_lossy().into_owned()
+        } else if initial_path.starts_with("file://") {
+            gio::File::for_uri(&initial_path)
+                .path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or(initial_path.clone())
+        } else {
+            initial_path.clone()
+        };
+        path_row.set_text(&display_path);
+
+        let view_row = adw::ActionRow::new();
+        view_row.set_title("Default view");
+        let view_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        view_box.add_css_class("linked");
+        view_box.set_valign(gtk4::Align::Center);
+        let grid_btn = gtk4::ToggleButton::with_label("Grid");
+        let list_btn = gtk4::ToggleButton::with_label("List");
+        list_btn.set_group(Some(&grid_btn));
+        let initial_view = app
+            .as_ref()
+            .map_or("grid".to_string(), |a| a.new_tab_default_view());
+        if initial_view == "list" {
+            list_btn.set_active(true);
+        } else {
+            grid_btn.set_active(true);
+        }
+        view_box.append(&grid_btn);
+        view_box.append(&list_btn);
+        view_row.add_suffix(&view_box);
+
+        let sort_row = adw::ComboRow::new();
+        sort_row.set_title("Default sort");
+        let sort_keys = ["name", "size", "date", "type"];
+        let sort_labels = ["Name", "Size", "Date Modified", "Type"];
+        let sort_model = gtk4::StringList::new(&sort_labels);
+        sort_row.set_model(Some(&sort_model));
+        let initial_sort = app
+            .as_ref()
+            .map_or("name".to_string(), |a| a.new_tab_default_sort_key());
+        let sort_idx = sort_keys
+            .iter()
+            .position(|k| *k == initial_sort.as_str())
+            .unwrap_or(0) as u32;
+        sort_row.set_selected(sort_idx);
+
+        let dir_row = adw::ActionRow::new();
+        dir_row.set_title("Default sort direction");
+        let dir_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        dir_box.add_css_class("linked");
+        dir_box.set_valign(gtk4::Align::Center);
+        let asc_btn = gtk4::ToggleButton::with_label("Ascending");
+        let desc_btn = gtk4::ToggleButton::with_label("Descending");
+        desc_btn.set_group(Some(&asc_btn));
+        let initial_reversed = app.as_ref().map_or(false, |a| a.new_tab_default_sort_reversed());
+        if initial_reversed {
+            desc_btn.set_active(true);
+        } else {
+            asc_btn.set_active(true);
+        }
+        dir_box.append(&asc_btn);
+        dir_box.append(&desc_btn);
+        dir_row.add_suffix(&dir_box);
+
+        let zoom_row = adw::SpinRow::with_range(1.0, 5.0, 1.0);
+        zoom_row.set_title("Default zoom");
+        zoom_row.set_subtitle("Icon size: 1 (smallest) to 5 (largest)");
+        let initial_zoom = app.as_ref().map_or(3, |a| a.new_tab_default_zoom());
+        zoom_row.set_value(initial_zoom as f64);
+
+        // Path row is gated by the use-defaults toggle; the per-default
+        // rows (view/sort/dir/zoom) are always editable per task spec.
+        path_row.set_sensitive(use_defaults);
+
+        use_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)] self,
+            #[weak] path_row,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_new_tab_use_defaults(row.is_active());
+                }
+                path_row.set_sensitive(row.is_active());
+            }
+        ));
+        path_row.connect_changed(glib::clone!(
+            #[weak(rename_to = window)] self,
+            move |entry| {
+                let text = entry.text().to_string();
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    let stored = if text.is_empty() {
+                        String::new()
+                    } else if text.contains("://") {
+                        text
+                    } else {
+                        gio::File::for_path(&text).uri().to_string()
+                    };
+                    app.set_new_tab_default_path(&stored);
+                }
+            }
+        ));
+        let connect_view = |btn: &gtk4::ToggleButton, value: &'static str| {
+            btn.connect_toggled(glib::clone!(
+                #[weak(rename_to = window)] self,
+                move |btn| {
+                    if !btn.is_active() { return; }
+                    if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                        app.set_new_tab_default_view(value);
+                    }
+                }
+            ));
+        };
+        connect_view(&grid_btn, "grid");
+        connect_view(&list_btn, "list");
+        sort_row.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)] self,
+            move |row| {
+                let idx = row.selected() as usize;
+                let key = ["name", "size", "date", "type"]
+                    .get(idx)
+                    .copied()
+                    .unwrap_or("name");
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_new_tab_default_sort_key(key);
+                }
+            }
+        ));
+        let connect_dir = |btn: &gtk4::ToggleButton, reversed: bool| {
+            btn.connect_toggled(glib::clone!(
+                #[weak(rename_to = window)] self,
+                move |btn| {
+                    if !btn.is_active() { return; }
+                    if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                        app.set_new_tab_default_sort_reversed(reversed);
+                    }
+                }
+            ));
+        };
+        connect_dir(&asc_btn, false);
+        connect_dir(&desc_btn, true);
+        zoom_row.connect_value_notify(glib::clone!(
+            #[weak(rename_to = window)] self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_new_tab_default_zoom(row.value() as i32);
+                }
+            }
+        ));
+
+        group.add(&use_row);
+        group.add(&path_row);
+        group.add(&view_row);
+        group.add(&sort_row);
+        group.add(&dir_row);
+        group.add(&zoom_row);
+        page.add(&group);
     }
 
     pub fn open_in_terminal(&self) {
