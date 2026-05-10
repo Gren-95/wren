@@ -53,6 +53,9 @@ pub struct WrenApplication {
     pub show_col_owner: Cell<bool>,
     pub show_col_group: Cell<bool>,
     pub show_col_accessed: Cell<bool>,
+    /// Action to take when activating an executable text file.
+    /// Stored as one of `"run"`, `"view"`, `"ask"`. Defaults to `"ask"`.
+    pub executable_text_action: RefCell<String>,
 }
 
 impl Default for WrenApplication {
@@ -102,6 +105,7 @@ impl Default for WrenApplication {
             show_col_owner: Cell::new(false),
             show_col_group: Cell::new(false),
             show_col_accessed: Cell::new(false),
+            executable_text_action: RefCell::new("ask".to_string()),
         }
     }
 }
@@ -303,6 +307,12 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("ListColumns", "accessed") {
                 self.show_col_accessed.set(v);
             }
+            if let Ok(v) = kf.string("Files", "executable_text_action") {
+                let s = v.to_string();
+                if matches!(s.as_str(), "run" | "view" | "ask") {
+                    *self.executable_text_action.borrow_mut() = s;
+                }
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -392,6 +402,7 @@ impl WrenApplication {
         kf.set_boolean("ListColumns", "owner", self.show_col_owner.get());
         kf.set_boolean("ListColumns", "group", self.show_col_group.get());
         kf.set_boolean("ListColumns", "accessed", self.show_col_accessed.get());
+        kf.set_string("Files", "executable_text_action", &self.executable_text_action.borrow());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

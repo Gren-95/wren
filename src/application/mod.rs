@@ -385,6 +385,19 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    /// Returns the current executable-text-file action: `"run"`, `"view"`, or `"ask"`.
+    pub fn executable_text_action(&self) -> String {
+        self.imp().executable_text_action.borrow().clone()
+    }
+    pub fn set_executable_text_action(&self, v: &str) {
+        let normalized = match v {
+            "run" | "view" | "ask" => v,
+            _ => "ask",
+        };
+        *self.imp().executable_text_action.borrow_mut() = normalized.to_string();
+        self.imp().save_settings();
+    }
+
     /// Push `uri` to the front of the recents list (MRU), deduplicating any
     /// prior occurrence and capping at `RECENTS_MAX`. Returns true when the
     /// list changed (caller may want to refresh the sidebar).
