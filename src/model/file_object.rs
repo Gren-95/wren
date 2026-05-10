@@ -42,7 +42,8 @@ impl FileObject {
     pub const QUERY_ATTRS: &'static str =
         "standard::name,standard::display-name,standard::type,standard::icon,\
          standard::content-type,standard::size,standard::is-hidden,\
-         standard::is-symlink,time::modified,time::access,access::can-delete,\
+         standard::is-symlink,standard::target-uri,\
+         time::modified,time::access,access::can-delete,\
          access::can-rename,access::can-read,access::can-execute,thumbnail::path,\
          unix::mode,owner::user,owner::group";
 
@@ -119,6 +120,21 @@ impl FileObject {
             ft,
             gio::FileType::Directory | gio::FileType::Shortcut | gio::FileType::Mountable
         )
+    }
+
+    /// Underlying gio file type. Used by activation to branch between
+    /// "navigate directly", "follow target_uri", and "mount then navigate".
+    pub fn file_type(&self) -> gio::FileType {
+        self.file_info().file_type()
+    }
+
+    /// `standard::target-uri` — set on Shortcut entries (e.g. SMB shares
+    /// listed by avahi under `network:///`). Returns None for ordinary
+    /// directories and files.
+    pub fn target_uri(&self) -> Option<String> {
+        self.file_info()
+            .attribute_string("standard::target-uri")
+            .map(|s| s.to_string())
     }
 
     /// True when the current user has read access. Driven by

@@ -427,6 +427,15 @@ impl WrenWindow {
                 return parent.child(file_obj.file_info().name());
             }
         }
+        // Shortcut entries (e.g. avahi-discovered SMB shares listed in
+        // network:///) point at a real URI via standard::target-uri.
+        // Follow it so navigation enumerates the actual share, not the
+        // discovery stub.
+        if matches!(file_obj.file_type(), gio::FileType::Shortcut) {
+            if let Some(uri) = file_obj.target_uri() {
+                return gio::File::for_uri(&uri);
+            }
+        }
         file_obj.file().clone()
     }
 
@@ -681,6 +690,46 @@ impl WrenWindow {
                                 .map_or(false, |t| t.load_gen.get() == load_gen)
                         };
                         if !is_current {
+                            return;
+                        }
+                        // NOT_MOUNTED → the location is a remote share that
+                        // hasn't been auto-mounted yet (typical for SMB
+                        // entries discovered via avahi). Trigger an
+                        // explicit mount-enclosing-volume and reload on
+                        // success, so the user's click goes through
+                        // without an error page in the way.
+                        if e.matches(gio::IOErrorEnum::NotMounted) {
+                            let parent_window = window.upcast_ref::<gtk4::Window>();
+                            let op = gtk4::MountOperation::new(Some(parent_window));
+                            let op_g: gio::MountOperation = op.upcast();
+                            let location_for_mount = location.clone();
+                            glib::spawn_future_local(glib::clone!(
+                                #[weak] window,
+                                async move {
+                                    let result = location_for_mount
+                                        .mount_enclosing_volume_future(
+                                            gio::MountMountFlags::NONE,
+                                            Some(&op_g),
+                                        )
+                                        .await;
+                                    match result {
+                                        Ok(()) => {
+                                            window.load_location_for_tab(tab_idx, location_for_mount);
+                                        }
+                                        Err(mount_err) => {
+                                            if !mount_err.matches(gio::IOErrorEnum::AlreadyMounted) {
+                                                window.show_toast(&format!(
+                                                    "Could not mount: {}",
+                                                    mount_err.message()
+                                                ));
+                                            } else {
+                                                // Already mounted — just retry the load.
+                                                window.load_location_for_tab(tab_idx, location_for_mount);
+                                            }
+                                        }
+                                    }
+                                }
+                            ));
                             return;
                         }
                         {
