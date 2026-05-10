@@ -174,7 +174,13 @@ fn strip_extension(name: &str) -> String {
 
 impl WrenFileCell {
     pub fn new() -> Self {
-        Object::builder().build()
+        // Fill the entire GridView slot so the click/drag target covers the
+        // whole cell bounds — clicking padding around the icon/label selects
+        // the cell instead of falling through to the view's deselect-all.
+        let cell: Self = Object::builder().build();
+        cell.set_hexpand(true);
+        cell.set_vexpand(true);
+        cell
     }
 
     fn imp(&self) -> &imp::WrenFileCell {
