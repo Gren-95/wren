@@ -88,11 +88,9 @@ impl WrenWindow {
         let perms_page = adw::PreferencesPage::new();
         perms_page.set_title("Permissions");
         perms_page.set_icon_name(Some("system-lock-screen-symbolic"));
-        let perms_group = adw::PreferencesGroup::new();
-        perms_page.add(&perms_group);
-        // Pre-add the page; populate_perms_page will fill perms_group when
-        // the extended-info query returns. If unix::mode is missing the
-        // group stays empty with a single placeholder row.
+        // Pre-add the page; populate_perms_page will fill it with several
+        // groups when the extended-info query returns. If unix::mode is
+        // missing the page shows just a placeholder row.
         dialog.add(&perms_page);
 
         // ── Open With page (files only) ─────────────────────────────────────
@@ -104,7 +102,7 @@ impl WrenWindow {
         // Kick off async population.
         spawn_size_walk(&basic.size_row, &subject, &dialog_cancel);
         spawn_free_space(&basic.free_space_row, &subject.target, &dialog_cancel);
-        spawn_extended_info(self, &subject, &basic, &perms_group, &dialog_cancel);
+        spawn_extended_info(self, &subject, &basic, &perms_page, &dialog_cancel);
 
         dialog.present(Some(self));
     }
@@ -498,7 +496,7 @@ fn spawn_extended_info(
     win: &WrenWindow,
     subject: &Subject,
     basic: &BasicRows,
-    perms_group: &adw::PreferencesGroup,
+    perms_page: &adw::PreferencesPage,
     cancel: &gio::Cancellable,
 ) {
     let target = subject.target.clone();
@@ -506,8 +504,9 @@ fn spawn_extended_info(
     let accessed_label = basic.accessed_label.clone();
     let created_label = basic.created_label.clone();
     let modified_label = basic.modified_label.clone();
-    let perms_group = perms_group.clone();
+    let perms_page = perms_page.clone();
     let is_directory = subject.is_directory;
+    let original_name = subject.name.clone();
 
     glib::spawn_future_local(clone!(
         #[weak(rename_to = window)]
@@ -516,6 +515,9 @@ fn spawn_extended_info(
             let attrs = "time::modified,time::access,time::created,\
                          owner::user,owner::user-real,owner::group,\
                          unix::mode,unix::uid,unix::gid,\
+                         unix::inode,unix::nlink,unix::device,\
+                         unix::block-size,unix::blocks,\
+                         standard::is-symlink,standard::symlink-target,\
                          selinux::context";
             let result = target
                 .query_info_future(
@@ -529,7 +531,9 @@ fn spawn_extended_info(
             }
             let Ok(info) = result else {
                 // Couldn't even query — show a placeholder permissions row.
-                add_perms_unavailable_row(&perms_group, "Permissions information unavailable");
+                let placeholder = adw::PreferencesGroup::new();
+                add_perms_unavailable_row(&placeholder, "Permissions information unavailable");
+                perms_page.add(&placeholder);
                 return;
             };
 
@@ -544,7 +548,7 @@ fn spawn_extended_info(
                 created_label.set_text(&format_glib_datetime(&dt));
             }
 
-            populate_perms_page(&window, &target, &info, is_directory, &perms_group, &cancel);
+            populate_perms_page(&window, &target, &info, is_directory, &original_name, &perms_page, &cancel);
         }
     ));
 }
@@ -553,54 +557,45 @@ fn spawn_extended_info(
 // Permissions page
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn populate_perms_page(
     win: &WrenWindow,
     target: &gio::File,
     info: &gio::FileInfo,
     is_directory: bool,
-    group: &adw::PreferencesGroup,
+    original_name: &str,
+    page: &adw::PreferencesPage,
     cancel: &gio::Cancellable,
 ) {
-    let owner = info
-        .attribute_string("owner::user-real")
-        .or_else(|| info.attribute_string("owner::user"))
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "—".into());
-    let group_name = info
-        .attribute_string("owner::group")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "—".into());
-
-    // Owner row
-    let owner_row = adw::ActionRow::new();
-    owner_row.set_title("Owner");
-    let owner_label = gtk4::Label::new(Some(&owner));
-    owner_label.add_css_class("dim-label");
-    owner_label.set_selectable(true);
-    owner_row.add_suffix(&owner_label);
-    group.add(&owner_row);
-
-    // Group row
-    let group_row = adw::ActionRow::new();
-    group_row.set_title("Group");
-    let group_label = gtk4::Label::new(Some(&group_name));
-    group_label.add_css_class("dim-label");
-    group_label.set_selectable(true);
-    group_row.add_suffix(&group_label);
-    group.add(&group_row);
-
-    // SELinux context (optional)
-    if let Some(ctx) = info.attribute_string("selinux::context") {
-        let ctx_row = adw::ActionRow::new();
-        ctx_row.set_title("Security Context");
-        let ctx_label = gtk4::Label::new(Some(ctx.as_str()));
-        ctx_label.add_css_class("dim-label");
-        ctx_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-        ctx_label.set_max_width_chars(48);
-        ctx_label.set_selectable(true);
-        ctx_row.add_suffix(&ctx_label);
-        group.add(&ctx_row);
-    }
+    // ── Name group (rename also lives here so the user doesn't need to
+    //    flip back to the General page).
+    let name_group = adw::PreferencesGroup::new();
+    name_group.set_title("Name");
+    let name_row = adw::EntryRow::new();
+    name_row.set_title("Filename");
+    name_row.set_text(original_name);
+    let name_orig = Rc::new(RefCell::new(original_name.to_string()));
+    let name_target = target.clone();
+    name_row.connect_apply(clone!(
+        #[weak(rename_to = window)]
+        win,
+        #[strong] name_orig,
+        #[strong] name_target,
+        move |row| {
+            let new_name = row.text().to_string();
+            let mut orig = name_orig.borrow_mut();
+            if new_name == *orig || new_name.is_empty() {
+                if new_name.is_empty() { row.set_text(&orig); }
+                return;
+            }
+            let old = orig.clone();
+            *orig = new_name.clone();
+            drop(orig);
+            window.spawn_properties_rename(name_target.clone(), old, new_name);
+        }
+    ));
+    name_group.add(&name_row);
+    page.add(&name_group);
 
     // Mode bits — bail if not present (non-local backend).
     // unix::mode is queried as uint32. The attribute is missing on
@@ -608,7 +603,9 @@ fn populate_perms_page(
     // attribute_uint32 returns 0 in that case which would render every
     // checkbox unchecked — distinguish by checking the attribute exists.
     if !info.has_attribute("unix::mode") {
-        add_perms_unavailable_row(group, "POSIX permissions not available for this location");
+        let placeholder = adw::PreferencesGroup::new();
+        add_perms_unavailable_row(&placeholder, "POSIX permissions not available for this location");
+        page.add(&placeholder);
         return;
     }
     let mode = info.attribute_uint32("unix::mode");
@@ -620,54 +617,24 @@ fn populate_perms_page(
     let editable = current_uid.map_or(false, |u| u == owner_uid);
 
     let mode_state = Rc::new(Cell::new(mode));
+    // Observers fire whenever any control mutates mode_state — used by
+    // the live-updating Octal / Symbolic mode rows in the Details group.
+    let mode_observers: Rc<RefCell<Vec<Box<dyn Fn(u32)>>>> = Rc::new(RefCell::new(Vec::new()));
 
-    // Three rows: Owner / Group / Others, each with three checkboxes.
-    add_perm_triplet_row(
-        group,
-        "Owner Permissions",
-        &mode_state,
-        target,
-        cancel,
-        editable,
-        is_directory,
-        0o400,
-        0o200,
-        0o100,
-    );
-    add_perm_triplet_row(
-        group,
-        "Group Permissions",
-        &mode_state,
-        target,
-        cancel,
-        editable,
-        is_directory,
-        0o040,
-        0o020,
-        0o010,
-    );
-    add_perm_triplet_row(
-        group,
-        "Others Permissions",
-        &mode_state,
-        target,
-        cancel,
-        editable,
-        is_directory,
-        0o004,
-        0o002,
-        0o001,
-    );
-
+    // ── Execution group — chmod +x equivalent, prominent at top.
     if !is_directory {
-        // "Allow executing as program" is a friendlier knob than the raw x
-        // bits — toggles owner+group+others execute together (Nautilus's
-        // behaviour). Wire it as a SwitchRow.
+        let exec_group = adw::PreferencesGroup::new();
+        exec_group.set_title("Execution");
+        exec_group.set_description(Some(
+            "When on, the file runs as a program when activated (chmod +x)",
+        ));
         let exec_row = adw::SwitchRow::new();
-        exec_row.set_title("Allow Executing As Program");
+        exec_row.set_title("Executable");
+        exec_row.set_subtitle("Sets the execute bit for everyone");
         exec_row.set_active(mode & 0o111 != 0);
         exec_row.set_sensitive(editable);
         let mode_state_for_exec = mode_state.clone();
+        let observers_for_exec = mode_observers.clone();
         let target_clone = target.clone();
         let cancel_clone = cancel.clone();
         exec_row.connect_active_notify(clone!(
@@ -675,24 +642,177 @@ fn populate_perms_page(
             win,
             move |row| {
                 let mut m = mode_state_for_exec.get();
-                if row.is_active() {
-                    m |= 0o111;
-                } else {
-                    m &= !0o111;
-                }
+                if row.is_active() { m |= 0o111; } else { m &= !0o111; }
                 mode_state_for_exec.set(m);
+                for cb in observers_for_exec.borrow().iter() { cb(m); }
                 spawn_set_mode(&window, target_clone.clone(), m, cancel_clone.clone());
             }
         ));
-        group.add(&exec_row);
+        exec_group.add(&exec_row);
+        page.add(&exec_group);
     }
+
+    // ── Permissions group — owner/group/SELinux + r/w/x triplets.
+    let perms_group = adw::PreferencesGroup::new();
+    perms_group.set_title("Permissions");
+
+    let owner = info
+        .attribute_string("owner::user-real")
+        .or_else(|| info.attribute_string("owner::user"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "—".into());
+    let group_name = info
+        .attribute_string("owner::group")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "—".into());
+
+    let owner_row = adw::ActionRow::new();
+    owner_row.set_title("Owner");
+    let owner_label = gtk4::Label::new(Some(&format!("{owner} ({owner_uid})")));
+    owner_label.add_css_class("dim-label");
+    owner_label.set_selectable(true);
+    owner_row.add_suffix(&owner_label);
+    perms_group.add(&owner_row);
+
+    let group_row = adw::ActionRow::new();
+    group_row.set_title("Group");
+    let gid = info.attribute_uint32("unix::gid");
+    let group_label = gtk4::Label::new(Some(&format!("{group_name} ({gid})")));
+    group_label.add_css_class("dim-label");
+    group_label.set_selectable(true);
+    group_row.add_suffix(&group_label);
+    perms_group.add(&group_row);
+
+    if let Some(ctx) = info.attribute_string("selinux::context") {
+        let ctx_row = adw::ActionRow::new();
+        ctx_row.set_title("Security Context");
+        let ctx_label = gtk4::Label::new(Some(ctx.as_str()));
+        ctx_label.add_css_class("dim-label");
+        ctx_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        ctx_label.set_max_width_chars(48);
+        ctx_label.set_selectable(true);
+        ctx_row.add_suffix(&ctx_label);
+        perms_group.add(&ctx_row);
+    }
+
+    add_perm_triplet_row(
+        &perms_group, "Owner Permissions",
+        &mode_state, &mode_observers, target, cancel,
+        editable, is_directory, 0o400, 0o200, 0o100,
+    );
+    add_perm_triplet_row(
+        &perms_group, "Group Permissions",
+        &mode_state, &mode_observers, target, cancel,
+        editable, is_directory, 0o040, 0o020, 0o010,
+    );
+    add_perm_triplet_row(
+        &perms_group, "Others Permissions",
+        &mode_state, &mode_observers, target, cancel,
+        editable, is_directory, 0o004, 0o002, 0o001,
+    );
 
     if !editable {
         let warn = adw::ActionRow::new();
         warn.set_title("Read-only");
         warn.set_subtitle("You are not the owner of this file");
-        group.add(&warn);
+        perms_group.add(&warn);
     }
+    page.add(&perms_group);
+
+    // ── Details group — live-updating octal/symbolic mode + extras.
+    let details_group = adw::PreferencesGroup::new();
+    details_group.set_title("Details");
+
+    let octal_row = adw::ActionRow::new();
+    octal_row.set_title("Octal mode");
+    let octal_label = gtk4::Label::new(Some(&format!("{:04o}", mode & 0o7777)));
+    octal_label.add_css_class("dim-label");
+    octal_label.add_css_class("monospace");
+    octal_label.set_selectable(true);
+    octal_row.add_suffix(&octal_label);
+    details_group.add(&octal_row);
+    {
+        let label = octal_label.clone();
+        mode_observers.borrow_mut().push(Box::new(move |m| {
+            label.set_text(&format!("{:04o}", m & 0o7777));
+        }));
+    }
+
+    let sym_row = adw::ActionRow::new();
+    sym_row.set_title("Symbolic mode");
+    let sym_label = gtk4::Label::new(Some(&format_symbolic_mode(mode)));
+    sym_label.add_css_class("dim-label");
+    sym_label.add_css_class("monospace");
+    sym_label.set_selectable(true);
+    sym_row.add_suffix(&sym_label);
+    details_group.add(&sym_row);
+    {
+        let label = sym_label.clone();
+        mode_observers.borrow_mut().push(Box::new(move |m| {
+            label.set_text(&format_symbolic_mode(m));
+        }));
+    }
+
+    if info.has_attribute("unix::inode") {
+        add_dim_row(&details_group, "Inode", &info.attribute_uint64("unix::inode").to_string());
+    }
+    if info.has_attribute("unix::nlink") {
+        add_dim_row(&details_group, "Hard links", &info.attribute_uint32("unix::nlink").to_string());
+    }
+    if info.has_attribute("unix::block-size") && info.has_attribute("unix::blocks") {
+        let bs = info.attribute_uint32("unix::block-size") as u64;
+        let blocks = info.attribute_uint64("unix::blocks");
+        add_dim_row(
+            &details_group,
+            "Allocated",
+            &format!("{} blocks · {} bytes", blocks, blocks * bs),
+        );
+    }
+    if info.has_attribute("unix::device") {
+        add_dim_row(&details_group, "Device", &format!("{}", info.attribute_uint32("unix::device")));
+    }
+    if info.is_symlink() {
+        if let Some(targ) = info.symlink_target() {
+            add_dim_row(&details_group, "Symlink target", &targ.to_string_lossy());
+        }
+    }
+    let uri = target.uri();
+    if !uri.is_empty() {
+        add_dim_row(&details_group, "URI", uri.as_str());
+    }
+
+    page.add(&details_group);
+}
+
+fn add_dim_row(group: &adw::PreferencesGroup, title: &str, value: &str) {
+    let row = adw::ActionRow::new();
+    row.set_title(title);
+    let label = gtk4::Label::new(Some(value));
+    label.add_css_class("dim-label");
+    label.set_selectable(true);
+    label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+    label.set_max_width_chars(48);
+    row.add_suffix(&label);
+    group.add(&row);
+}
+
+fn format_symbolic_mode(mode: u32) -> String {
+    let bit = |b: u32| mode & b != 0;
+    let triplet = |out: &mut String, r: u32, w: u32, x: u32, sp: u32, sl: char, su: char| {
+        out.push(if bit(r) { 'r' } else { '-' });
+        out.push(if bit(w) { 'w' } else { '-' });
+        out.push(match (bit(x), bit(sp)) {
+            (true, true) => sl,
+            (false, true) => su,
+            (true, false) => 'x',
+            (false, false) => '-',
+        });
+    };
+    let mut out = String::with_capacity(9);
+    triplet(&mut out, 0o400, 0o200, 0o100, 0o4000, 's', 'S');
+    triplet(&mut out, 0o040, 0o020, 0o010, 0o2000, 's', 'S');
+    triplet(&mut out, 0o004, 0o002, 0o001, 0o1000, 't', 'T');
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -700,6 +820,7 @@ fn add_perm_triplet_row(
     group: &adw::PreferencesGroup,
     title: &str,
     mode_state: &Rc<Cell<u32>>,
+    observers: &Rc<RefCell<Vec<Box<dyn Fn(u32)>>>>,
     target: &gio::File,
     cancel: &gio::Cancellable,
     editable: bool,
@@ -730,6 +851,7 @@ fn add_perm_triplet_row(
 
     let on_toggle = |bit: u32, cb: &gtk4::CheckButton| {
         let mode_state = mode_state.clone();
+        let observers = observers.clone();
         let target = target.clone();
         let cancel = cancel.clone();
         cb.connect_toggled(move |cb| {
@@ -740,6 +862,7 @@ fn add_perm_triplet_row(
                 m &= !bit;
             }
             mode_state.set(m);
+            for cb in observers.borrow().iter() { cb(m); }
             // We don't have a window handle here, but spawn_set_mode
             // doesn't strictly need one — toast suppression on failure
             // is acceptable for the perms triplet.
