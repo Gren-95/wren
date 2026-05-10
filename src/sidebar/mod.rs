@@ -253,7 +253,8 @@ impl WrenSidebar {
         let monitor = gio::VolumeMonitor::get();
 
         // Only mounts whose root URI scheme is something other than
-        // "file" — i.e. real remote shares (sftp, smb, dav, ftp, …).
+        // "file" — i.e. real remote shares (sftp, smb, dav, ftp, …)
+        // and cloud-account mounts (google-drive, dav).
         let remote_mounts: Vec<gio::Mount> = monitor
             .mounts()
             .into_iter()
@@ -265,6 +266,17 @@ impl WrenSidebar {
             })
             .collect();
 
+        // Snapshot the remote mount names so append_volumes_section can
+        // skip the same-named file:// FUSE proxies (GOA exposes cloud
+        // accounts under both google-drive:// and a file:// path).
+        {
+            let mut set = imp.network_names.borrow_mut();
+            set.clear();
+            for m in &remote_mounts {
+                set.insert(m.name().to_string().to_lowercase());
+            }
+        }
+
         list.append(&Self::build_header_row("Network"));
         imp.place_uris.borrow_mut().push(String::new());
 
@@ -275,6 +287,31 @@ impl WrenSidebar {
         Self::attach_sidebar_context_menu(&row, network_uri, false);
         list.append(&row);
         imp.place_uris.borrow_mut().push(network_uri.to_string());
+
+        // "Connect to Server…" — non-navigable row that fires
+        // win.open-location (Ctrl+Shift+L). Carries an empty URI so the
+        // standard activation handler falls through to the row's
+        // attached gesture.
+        let connect_row = Self::build_place_row("Connect to Server…", "network-server-symbolic");
+        let click = gtk4::GestureClick::new();
+        click.set_button(gtk4::gdk::BUTTON_PRIMARY);
+        click.connect_pressed(move |gesture, _, _, _| {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            if let Some(win) = gesture
+                .widget()
+                .and_then(|w| w.root())
+                .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
+            {
+                gtk4::prelude::WidgetExt::activate_action(
+                    &win, "win.open-location", None,
+                ).ok();
+            }
+        });
+        connect_row.add_controller(click);
+        list.append(&connect_row);
+        // Empty URI so the row_activated handler ignores it (the
+        // GestureClick above handles activation directly).
+        imp.place_uris.borrow_mut().push(String::new());
 
         for mount in &remote_mounts {
             let name = mount.name().to_string();
@@ -354,6 +391,12 @@ impl WrenSidebar {
         let monitor = gio::VolumeMonitor::get();
         // Only local mounts belong under Devices; remote mounts (sftp,
         // smb, dav, …) are rendered under the Network section instead.
+        // GOA-backed cloud accounts (Google Drive, Nextcloud) sometimes
+        // surface as both a non-file:// remote mount AND a file:// FUSE
+        // proxy with the same display name — append_network_section
+        // populates imp.network_names, and we skip same-named file://
+        // mounts here so the account doesn't render in both sections.
+        let network_names = imp.network_names.borrow().clone();
         let raw_mounts: Vec<gio::Mount> = monitor
             .mounts()
             .into_iter()
@@ -363,6 +406,7 @@ impl WrenSidebar {
                     .map(|s| s.as_str() == "file")
                     .unwrap_or(false)
             })
+            .filter(|m| !network_names.contains(&m.name().to_string().to_lowercase()))
             .collect();
         let volumes: Vec<gio::Volume> = monitor.volumes();
 

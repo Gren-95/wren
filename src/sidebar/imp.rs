@@ -13,6 +13,11 @@ pub struct WrenSidebar {
     pub place_uris: RefCell<Vec<String>>,
     pub n_static_rows: std::cell::Cell<i32>,
     pub volume_monitor_handlers: RefCell<Vec<glib::SignalHandlerId>>,
+    /// Lower-cased display names of mounts shown in the Network section.
+    /// Populated by append_network_section, consumed by append_volumes_section
+    /// so a cloud account that's exposed as both a non-file:// remote mount
+    /// and a file:// FUSE proxy doesn't duplicate across the two sections.
+    pub network_names: RefCell<std::collections::HashSet<String>>,
 }
 
 #[glib::object_subclass]
