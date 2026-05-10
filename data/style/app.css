@@ -18,8 +18,17 @@ gridview > child {
   font-size: 0.85em;
 }
 
-.wren-hidden-file {
-  opacity: 0.5;
+/* Dim dotfiles when "Show hidden" is on. We avoid `opacity:` here
+   because it forces GSK to composite each cell offscreen on every
+   paint — heavy with hundreds of cells visible. `color: alpha(...)`
+   recolours the label/symbolic-icon glyphs only, no compositing.
+   Excludes badge images so the symlink/unreadable overlays stay
+   at full intensity on hidden files. */
+.wren-hidden-file label {
+  color: alpha(currentColor, 0.55);
+}
+.wren-hidden-file image:not(.wren-symlink-badge):not(.wren-unreadable-badge) {
+  color: alpha(currentColor, 0.6);
 }
 
 /* Small symbolic-link emblem overlaid at the icon's bottom-right.
@@ -27,6 +36,20 @@ gridview > child {
    any icon (dark thumbnails, busy artwork, …). */
 .wren-symlink-badge {
   background-color: @view_bg_color;
+  border-radius: 9999px;
+  padding: 1px;
+  margin: 1px;
+  -gtk-icon-size: 16px;
+}
+
+/* Lock emblem overlaid at the icon's top-right when the file is
+   unreadable by the current user. Same circular backdrop pattern
+   as the symlink badge — keeps the glyph legible on dark
+   thumbnails. Tinted with the warning colour to read as
+   "permission problem" at a glance. */
+.wren-unreadable-badge {
+  background-color: @view_bg_color;
+  color: @warning_color;
   border-radius: 9999px;
   padding: 1px;
   margin: 1px;

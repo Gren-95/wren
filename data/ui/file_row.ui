@@ -28,6 +28,18 @@
                 </style>
               </object>
             </child>
+            <child type="overlay">
+              <object class="GtkImage" id="unreadable_badge">
+                <property name="visible">false</property>
+                <property name="icon-name">changes-prevent-symbolic</property>
+                <property name="pixel-size">10</property>
+                <property name="halign">end</property>
+                <property name="valign">start</property>
+                <style>
+                  <class name="wren-unreadable-badge"/>
+                </style>
+              </object>
+            </child>
           </object>
         </child>
         <child>
