@@ -107,6 +107,12 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn single_click(&self) -> bool { self.imp().single_click.get() }
+    pub fn set_single_click(&self, v: bool) {
+        self.imp().single_click.set(v);
+        self.imp().save_settings();
+    }
+
     pub fn recent_uris(&self) -> Vec<String> {
         self.imp().recent_uris.borrow().clone()
     }

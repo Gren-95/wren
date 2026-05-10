@@ -195,6 +195,10 @@ impl WrenFileList {
         )));
     }
 
+    pub fn set_single_click_activate(&self, on: bool) {
+        imp::WrenFileList::from_obj(self).list_view.set_single_click_activate(on);
+    }
+
     pub fn setup_drop_target(&self) {
         let imp = imp::WrenFileList::from_obj(self);
         let drop = gtk4::DropTarget::new(

@@ -25,6 +25,7 @@ pub struct WrenApplication {
     pub animations_enabled: Cell<bool>,
     pub debug_logging: Cell<bool>,
     pub recent_uris: RefCell<Vec<String>>,
+    pub single_click: Cell<bool>,
 }
 
 impl Default for WrenApplication {
@@ -48,6 +49,7 @@ impl Default for WrenApplication {
             animations_enabled: Cell::new(true),
             debug_logging: Cell::new(false),
             recent_uris: RefCell::new(Vec::new()),
+            single_click: Cell::new(false),
         }
     }
 }
@@ -130,6 +132,9 @@ impl WrenApplication {
                     *self.color_scheme.borrow_mut() = s;
                 }
             }
+            if let Ok(v) = kf.boolean("Files", "single_click") {
+                self.single_click.set(v);
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -172,6 +177,7 @@ impl WrenApplication {
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         kf.set_boolean("General", "debug_logging", self.debug_logging.get());
+        kf.set_boolean("Files", "single_click", self.single_click.get());
         kf.set_string("Recents", "uris", &self.recent_uris.borrow().join("\t"));
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());

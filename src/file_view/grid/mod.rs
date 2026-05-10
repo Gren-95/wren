@@ -215,6 +215,10 @@ impl WrenFileGrid {
         )));
     }
 
+    pub fn set_single_click_activate(&self, on: bool) {
+        imp::WrenFileGrid::from_obj(self).grid_view.set_single_click_activate(on);
+    }
+
     pub fn setup_empty_area_click(&self) {
         let imp = imp::WrenFileGrid::from_obj(self);
         let gesture = gtk4::GestureClick::new();

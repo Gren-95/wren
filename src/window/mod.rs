@@ -166,6 +166,9 @@ impl WrenWindow {
             tab.sort_key = sort_key;
             tab.sort_reversed = app.sort_reversed();
             tab.file_list.set_sort_state(sort_key.as_str(), tab.sort_reversed);
+            let single = app.single_click();
+            tab.file_grid.set_single_click_activate(single);
+            tab.file_list.set_single_click_activate(single);
         }
 
         let page = imp.tab_view.append(&tab.content_widget);
@@ -1661,6 +1664,43 @@ impl WrenWindow {
         page.add(&advanced_group);
 
         dialog.add(&page);
+
+        // Files page
+        let files_page = adw::PreferencesPage::new();
+        files_page.set_title("Files");
+        files_page.set_icon_name(Some("folder-symbolic"));
+
+        let files_group = adw::PreferencesGroup::new();
+        files_group.set_title("Behavior");
+
+        let single_click_row = adw::SwitchRow::new();
+        single_click_row.set_title("Single-click to open");
+        single_click_row.set_subtitle("Open files and folders with a single click");
+        let initial_single = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.single_click())
+            .unwrap_or(false);
+        single_click_row.set_active(initial_single);
+        single_click_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let v = row.is_active();
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_single_click(v);
+                }
+                let imp = window.imp();
+                for tab in imp.tabs.borrow().iter() {
+                    tab.file_grid.set_single_click_activate(v);
+                    tab.file_list.set_single_click_activate(v);
+                }
+            }
+        ));
+        files_group.add(&single_click_row);
+        files_page.add(&files_group);
+        dialog.add(&files_page);
+
         dialog.present(Some(self));
     }
 
