@@ -48,8 +48,6 @@ pub struct WrenWindow {
     #[template_child]
     pub op_button: TemplateChild<gtk4::MenuButton>,
     #[template_child]
-    pub new_folder_split: TemplateChild<adw::SplitButton>,
-    #[template_child]
     pub banner: TemplateChild<adw::Banner>,
 
     /// Active banner button-clicked handler — kept so we can disconnect a
@@ -97,7 +95,6 @@ impl Default for WrenWindow {
             filter_button: Default::default(),
             breadcrumb_bar: Default::default(),
             op_button: Default::default(),
-            new_folder_split: Default::default(),
             banner: Default::default(),
             banner_handler: Default::default(),
             tabs: Default::default(),
@@ -755,20 +752,6 @@ impl ObjectImpl for WrenWindow {
             imp.op_button.set_popover(Some(&popover));
             let spinner = adw::Spinner::new();
             imp.op_button.set_child(Some(&spinner));
-        }
-
-        // New-folder split button dropdown: rebuild the menu before each
-        // popup so freshly-added ~/Templates entries appear without a
-        // restart. Mirrors the empty-area context menu's strategy.
-        {
-            let popover = gtk4::PopoverMenu::from_model(Some(
-                &super::WrenWindow::new_folder_split_menu(),
-            ));
-            popover.set_has_arrow(false);
-            obj.imp().new_folder_split.set_popover(Some(&popover));
-            popover.connect_show(|popover| {
-                popover.set_menu_model(Some(&super::WrenWindow::new_folder_split_menu()));
-            });
         }
 
         // Sidebar toggle button — keep split_view and button in sync

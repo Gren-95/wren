@@ -1151,31 +1151,6 @@ impl WrenWindow {
         menu.upcast()
     }
 
-    /// Menu model for the header-bar AdwSplitButton dropdown. Rebuilt fresh
-    /// on every popup so adding/removing ~/Templates files while wren is
-    /// open Just Works (same strategy as the empty-area context menu).
-    pub fn new_folder_split_menu() -> gio::MenuModel {
-        let menu = gio::Menu::new();
-        menu.append(Some("New Folder"), Some("win.new-folder"));
-        let show_ext = gio::Application::default()
-            .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.show_extensions());
-        let templates = templates::list_templates();
-        if !templates.is_empty() {
-            let templates_section = gio::Menu::new();
-            for (name, _path) in &templates {
-                let label = template_label(name, show_ext);
-                let item = gio::MenuItem::new(Some(&label), None);
-                item.set_action_and_target_value(
-                    Some("win.new-from-template"),
-                    Some(&name.to_variant()),
-                );
-                templates_section.append_item(&item);
-            }
-            menu.append_section(Some("Templates"), &templates_section);
-        }
-        menu.upcast()
-    }
 
     // ── Selection helpers ────────────────────────────────────────────────────
 

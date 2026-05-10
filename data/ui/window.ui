@@ -41,17 +41,6 @@
                 </style>
               </object>
             </child>
-            <child type="start">
-              <object class="AdwSplitButton" id="new_folder_split">
-                <property name="icon-name">folder-new-symbolic</property>
-                <property name="action-name">win.new-folder</property>
-                <property name="tooltip-text">New Folder</property>
-                <property name="dropdown-tooltip">New from Template</property>
-                <style>
-                  <class name="flat"/>
-                </style>
-              </object>
-            </child>
             <property name="title-widget">
               <object class="WrenBreadcrumbBar" id="breadcrumb_bar">
                 <property name="hexpand">true</property>
