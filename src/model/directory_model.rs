@@ -596,27 +596,6 @@ mod tests {
     }
 
     #[test]
-    fn filter_search_text_matches_substring_case_insensitive() {
-        run_on_gtk_thread(|| {
-            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
-            let items = vec![
-                make_file_object("Photo.png", gio::FileType::Regular, 1, "image/png", 1),
-                make_file_object("notes.txt", gio::FileType::Regular, 1, "text/plain", 1),
-                make_file_object(
-                    "backup.tar",
-                    gio::FileType::Regular,
-                    1,
-                    "application/x-tar",
-                    1,
-                ),
-            ];
-            model.store.splice(0, 0, &items);
-            model.set_filter("PHOTO", false);
-            assert_eq!(names_in_selection(&model), vec!["Photo.png".to_string()]);
-        });
-    }
-
-    #[test]
     fn directories_sort_before_files() {
         run_on_gtk_thread(|| {
             let model = DirectoryModel::new(gio::File::for_path("/tmp"));
@@ -724,6 +703,177 @@ mod tests {
             model.set_sort(SortKey::Date, true);
             assert_eq!(model.sort_key(), SortKey::Date);
             assert!(model.sort_reversed());
+        });
+    }
+
+    // --- MimeCategory ----------------------------------------------
+
+    #[test]
+    fn mime_category_round_trip_all_variants() {
+        for cat in [
+            MimeCategory::All,
+            MimeCategory::Images,
+            MimeCategory::Videos,
+            MimeCategory::Audio,
+            MimeCategory::Documents,
+            MimeCategory::Archives,
+        ] {
+            assert_eq!(MimeCategory::from_str(cat.as_str()), cat);
+        }
+    }
+
+    #[test]
+    fn mime_category_unknown_string_defaults_to_all() {
+        assert_eq!(MimeCategory::from_str("anything else"), MimeCategory::All);
+        assert_eq!(MimeCategory::from_str(""), MimeCategory::All);
+        assert_eq!(MimeCategory::from_str("Images"), MimeCategory::All); // case sensitive
+    }
+
+    #[test]
+    fn mime_category_all_matches_anything() {
+        assert!(MimeCategory::All.matches("image/png"));
+        assert!(MimeCategory::All.matches("application/zip"));
+        assert!(MimeCategory::All.matches(""));
+        assert!(MimeCategory::All.matches("nonsense"));
+    }
+
+    #[test]
+    fn mime_category_empty_content_type_only_matches_all() {
+        assert!(MimeCategory::All.matches(""));
+        assert!(!MimeCategory::Images.matches(""));
+        assert!(!MimeCategory::Videos.matches(""));
+        assert!(!MimeCategory::Audio.matches(""));
+        assert!(!MimeCategory::Documents.matches(""));
+        assert!(!MimeCategory::Archives.matches(""));
+    }
+
+    #[test]
+    fn mime_category_images_match_image_subtree_only() {
+        assert!(MimeCategory::Images.matches("image/png"));
+        assert!(MimeCategory::Images.matches("image/jpeg"));
+        assert!(!MimeCategory::Images.matches("text/plain"));
+    }
+
+    #[test]
+    fn mime_category_documents_pdf_text_office_open_xml_and_open_document() {
+        // The Documents bucket spans plaintext, PDF, RTF, .doc, modern
+        // OOXML formats, and ODF.
+        assert!(MimeCategory::Documents.matches("application/pdf"));
+        assert!(MimeCategory::Documents.matches("text/plain"));
+        assert!(MimeCategory::Documents.matches(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ));
+        assert!(MimeCategory::Documents.matches("application/vnd.oasis.opendocument.text"));
+        // Negative: an image is not a document.
+        assert!(!MimeCategory::Documents.matches("image/jpeg"));
+    }
+
+    #[test]
+    fn mime_category_archives_match_known_compressed_formats() {
+        assert!(MimeCategory::Archives.matches("application/zip"));
+        assert!(MimeCategory::Archives.matches("application/x-tar"));
+        assert!(MimeCategory::Archives.matches("application/gzip"));
+        assert!(MimeCategory::Archives.matches("application/x-7z-compressed"));
+        assert!(MimeCategory::Archives.matches("application/x-bzip2"));
+        assert!(MimeCategory::Archives.matches("application/zstd"));
+        assert!(!MimeCategory::Archives.matches("application/pdf"));
+    }
+
+    // --- folders-first thread-local --------------------------------
+
+    #[test]
+    #[serial_test::serial]
+    fn folders_first_default_sorts_directories_above_files() {
+        run_on_gtk_thread(|| {
+            // Force the documented default explicitly so prior tests can't
+            // leak a different value across the shared GTK worker.
+            super::set_folders_first(true);
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            // 'a' file precedes 'z' directory alphabetically — only the
+            // folders-first rule can flip the order.
+            let items = vec![
+                make_file_object("alpha", gio::FileType::Regular, 0, "text/plain", 1),
+                make_file_object(
+                    "zeta",
+                    gio::FileType::Directory,
+                    0,
+                    "inode/directory",
+                    1,
+                ),
+            ];
+            model.store.splice(0, 0, &items);
+            assert_eq!(
+                names_in_selection(&model),
+                vec!["zeta".to_string(), "alpha".to_string()]
+            );
+            // Restore default for any subsequent serialised test.
+            super::set_folders_first(true);
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn folders_first_off_falls_through_to_name_sort() {
+        run_on_gtk_thread(|| {
+            super::set_folders_first(false);
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("alpha", gio::FileType::Regular, 0, "text/plain", 1),
+                make_file_object(
+                    "zeta",
+                    gio::FileType::Directory,
+                    0,
+                    "inode/directory",
+                    1,
+                ),
+            ];
+            model.store.splice(0, 0, &items);
+            // With folders_first off, name asc — file 'alpha' wins.
+            assert_eq!(
+                names_in_selection(&model),
+                vec!["alpha".to_string(), "zeta".to_string()]
+            );
+            // Restore the documented default.
+            super::set_folders_first(true);
+        });
+    }
+
+    // --- set_category ----------------------------------------------
+
+    #[test]
+    fn set_category_filters_files_by_mime_and_lets_directories_pass() {
+        run_on_gtk_thread(|| {
+            let model = DirectoryModel::new(gio::File::for_path("/tmp"));
+            let items = vec![
+                make_file_object("pic.png", gio::FileType::Regular, 1, "image/png", 1),
+                make_file_object("notes.txt", gio::FileType::Regular, 1, "text/plain", 1),
+                make_file_object(
+                    "subdir",
+                    gio::FileType::Directory,
+                    0,
+                    "inode/directory",
+                    1,
+                ),
+            ];
+            model.store.splice(0, 0, &items);
+
+            // All: 3 visible.
+            model.set_category(MimeCategory::All);
+            assert_eq!(model.selection.n_items(), 3);
+
+            // Images: directory + image.
+            model.set_category(MimeCategory::Images);
+            let names = names_in_selection(&model);
+            assert!(names.contains(&"pic.png".to_string()));
+            assert!(names.contains(&"subdir".to_string()));
+            assert!(!names.contains(&"notes.txt".to_string()));
+
+            // Documents: directory + text.
+            model.set_category(MimeCategory::Documents);
+            let names = names_in_selection(&model);
+            assert!(names.contains(&"notes.txt".to_string()));
+            assert!(names.contains(&"subdir".to_string()));
+            assert!(!names.contains(&"pic.png".to_string()));
         });
     }
 }

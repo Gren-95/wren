@@ -459,7 +459,7 @@ fn format_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_size, strip_extension_name, WrenFileRow};
+    use super::{format_permissions, format_size, strip_extension_name, WrenFileRow};
     use crate::model::FileObject;
     use crate::test_helpers::run_on_gtk_thread;
 
@@ -483,7 +483,7 @@ mod tests {
         run_on_gtk_thread(|| {
             let row = WrenFileRow::new();
             let fo = make_file_object("data.bin", gio::FileType::Regular, 2048);
-            row.bind(&fo, 24, true);
+            row.bind(&fo, 24, true, false);
             // Inspect template children directly via imp().
             let imp = row.imp();
             assert_eq!(imp.name.label().as_str(), "data.bin");
@@ -493,15 +493,21 @@ mod tests {
     }
 
     #[test]
-    fn row_bind_directory_shows_folder_label_and_em_dash_size() {
+    fn row_bind_directory_shows_folder_label_and_pending_size_placeholder() {
         run_on_gtk_thread(|| {
             let row = WrenFileRow::new();
             let fo = make_file_object("subdir", gio::FileType::Directory, 0);
-            row.bind(&fo, 24, true);
+            row.bind(&fo, 24, true, false);
             let imp = row.imp();
             assert_eq!(imp.content_type.label().as_str(), "Folder");
-            // Directories don't display a meaningful size — em-dash placeholder.
-            assert_eq!(imp.size.label().as_str(), "—");
+            // Directories show "…" while the async folder-count enumeration
+            // is in flight (or "—" when the policy disables counting). The
+            // test only synchronously observes the immediate placeholder.
+            let size = imp.size.label().to_string();
+            assert!(
+                matches!(size.as_str(), "…" | "—"),
+                "unexpected size placeholder: {size:?}"
+            );
         });
     }
 
@@ -510,7 +516,7 @@ mod tests {
         run_on_gtk_thread(|| {
             let row = WrenFileRow::new();
             let fo = make_file_object("photo.jpg", gio::FileType::Regular, 100);
-            row.bind(&fo, 24, false);
+            row.bind(&fo, 24, false, false);
             assert_eq!(row.imp().name.label().as_str(), "photo");
         });
     }
@@ -520,7 +526,7 @@ mod tests {
         run_on_gtk_thread(|| {
             let row = WrenFileRow::new();
             let fo = make_file_object("any.txt", gio::FileType::Regular, 50);
-            row.bind(&fo, 24, true);
+            row.bind(&fo, 24, true, false);
             row.unbind();
             let imp = row.imp();
             assert_eq!(imp.name.label().as_str(), "");
@@ -588,5 +594,55 @@ mod tests {
         assert_eq!(format_size(1023), "1023 B");
         // At KB boundary switches units.
         assert_eq!(format_size(1024), "1 KB");
+    }
+
+    // --- format_permissions ----------------------------------------
+
+    #[test]
+    fn format_permissions_typical_executable() {
+        // Standard rwxr-xr-x for an executable / directory.
+        assert_eq!(format_permissions(0o755), "rwxr-xr-x");
+    }
+
+    #[test]
+    fn format_permissions_typical_data_file() {
+        assert_eq!(format_permissions(0o644), "rw-r--r--");
+    }
+
+    #[test]
+    fn format_permissions_no_bits_set() {
+        // Pathological "no permissions at all" — every slot a dash.
+        assert_eq!(format_permissions(0o000), "---------");
+    }
+
+    #[test]
+    fn format_permissions_setuid_with_user_exec() {
+        // setuid + user exec → lowercase 's' in the user-exec slot.
+        assert_eq!(format_permissions(0o4755), "rwsr-xr-x");
+    }
+
+    #[test]
+    fn format_permissions_setuid_without_user_exec() {
+        // setuid WITHOUT user exec → uppercase 'S'.
+        assert_eq!(format_permissions(0o4644), "rwSr--r--");
+    }
+
+    #[test]
+    fn format_permissions_setgid_with_group_exec() {
+        // setgid + group exec → lowercase 's' in the group-exec slot.
+        assert_eq!(format_permissions(0o2755), "rwxr-sr-x");
+    }
+
+    #[test]
+    fn format_permissions_sticky_with_other_exec() {
+        // sticky + other exec → lowercase 't' in the other-exec slot.
+        assert_eq!(format_permissions(0o1755), "rwxr-xr-t");
+    }
+
+    #[test]
+    fn format_permissions_all_three_special_bits() {
+        // setuid + setgid + sticky, all with their respective execute
+        // bits set, render as the three lowercase letters.
+        assert_eq!(format_permissions(0o7755), "rwsr-sr-t");
     }
 }

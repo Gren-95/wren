@@ -506,7 +506,12 @@ mod tests {
         // Wipe settings.ini so the new WrenApplication starts from defaults.
         let p = settings_ini_path();
         let _ = std::fs::remove_file(&p);
-        WrenApplication::new(&format!("io.github.wren.test.{suffix}"))
+        let app = WrenApplication::new(&format!("io.github.wren.test.{suffix}"));
+        // Recents are opt-in; enable so push_recent_uri() does work in
+        // tests that exercise the MRU path. Tests that need the disabled
+        // case can explicitly call set_recents_enabled(false) afterwards.
+        app.set_recents_enabled(true);
+        app
     }
 
     #[test]
@@ -563,6 +568,9 @@ mod tests {
     fn push_recent_caps_at_recents_max() {
         ensure_gtk();
         let app = fresh_app("cap");
+        // Raise the cap so we can verify the global ceiling, otherwise
+        // push_recent_uri truncates at the lower per-user RECENTS_DEFAULT.
+        app.set_recents_cap(RECENTS_MAX);
         // Push RECENTS_MAX + 1 distinct uris.
         for i in 0..=RECENTS_MAX {
             assert!(app.push_recent_uri(&format!("file:///dir-{i}")));
@@ -592,8 +600,21 @@ mod tests {
         app.set_sidebar_visible(false);
         app.set_last_directory("file:///home/foo");
         app.set_color_scheme_pref("dark");
-        app.set_last_tabs(
-            vec!["file:///a".to_string(), "file:///b".to_string()],
+        app.set_tab_states(
+            vec![
+                TabPref {
+                    uri: "file:///a".to_string(),
+                    sort_key: "name".to_string(),
+                    reversed: false,
+                    view_mode: "grid".to_string(),
+                },
+                TabPref {
+                    uri: "file:///b".to_string(),
+                    sort_key: "name".to_string(),
+                    reversed: false,
+                    view_mode: "grid".to_string(),
+                },
+            ],
             1,
         );
         app.push_recent_uri("file:///recent-a");
@@ -615,8 +636,13 @@ mod tests {
         assert!(!app2.sidebar_visible());
         assert_eq!(app2.last_directory(), "file:///home/foo");
         assert_eq!(app2.color_scheme(), "dark");
+        let restored: Vec<String> = app2
+            .tab_states()
+            .into_iter()
+            .map(|t| t.uri)
+            .collect();
         assert_eq!(
-            app2.last_tabs(),
+            restored,
             vec!["file:///a".to_string(), "file:///b".to_string()]
         );
         assert_eq!(app2.last_tab_index(), 1);
@@ -674,14 +700,17 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn settings_recent_uris_truncated_on_load() {
-        // A settings.ini with > RECENTS_MAX entries is truncated by load_settings.
+        // A settings.ini with more entries than the configured cap is
+        // truncated by load_settings.
         ensure_gtk();
         let app = fresh_app("trunc");
         app.set_zoom_level(3); // ensure save_settings runs and creates the file
         let p = settings_ini_path();
 
-        // Build a tab-joined list of 20 entries — twice the cap.
-        let many: Vec<String> = (0..20).map(|i| format!("file:///many-{i}")).collect();
+        // Build a tab-joined list of (RECENTS_DEFAULT * 2) entries — twice
+        // the default cap, so load_settings has to drop half.
+        let count = RECENTS_DEFAULT * 2;
+        let many: Vec<String> = (0..count).map(|i| format!("file:///many-{i}")).collect();
         let joined = many.join("\t");
         let raw = std::fs::read_to_string(&p).unwrap();
         let mut new_lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
@@ -702,8 +731,228 @@ mod tests {
 
         let app2 = WrenApplication::new("io.github.wren.test.trunc2");
         adw::subclass::prelude::ObjectSubclassIsExt::imp(&app2).reload_for_test();
-        assert_eq!(app2.recent_uris().len(), RECENTS_MAX);
-        // The first RECENTS_MAX entries are the ones kept (load truncates the tail).
+        assert_eq!(app2.recent_uris().len(), RECENTS_DEFAULT);
+        // The first RECENTS_DEFAULT entries are the ones kept (load truncates
+        // the tail).
         assert_eq!(app2.recent_uris()[0], "file:///many-0");
+    }
+
+    // ---- TabPref::to_line / parse_line ----------------------------
+
+    fn assert_tab_pref_round_trip(t: TabPref) {
+        let line = t.to_line();
+        let parsed = TabPref::parse_line(&line).expect("parse_line");
+        assert_eq!(parsed.uri, t.uri);
+        assert_eq!(parsed.sort_key, t.sort_key);
+        assert_eq!(parsed.reversed, t.reversed);
+        assert_eq!(parsed.view_mode, t.view_mode);
+    }
+
+    #[test]
+    fn tab_pref_round_trip_all_combinations() {
+        for sort_key in ["name", "size", "date", "type"] {
+            for reversed in [false, true] {
+                for view_mode in ["grid", "list"] {
+                    assert_tab_pref_round_trip(TabPref {
+                        uri: "file:///some/path".to_string(),
+                        sort_key: sort_key.to_string(),
+                        reversed,
+                        view_mode: view_mode.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tab_pref_parse_rejects_empty_uri() {
+        // The first '|'-separated field is the URI; an empty URI returns None
+        // so a corrupt persisted line doesn't surface as a phantom tab.
+        assert!(TabPref::parse_line("|name|asc|grid").is_none());
+    }
+
+    #[test]
+    fn tab_pref_parse_clamps_unknown_sort_key_to_name() {
+        let t = TabPref::parse_line("file:///x|invalid|asc|grid").expect("parse");
+        assert_eq!(t.sort_key, "name");
+    }
+
+    #[test]
+    fn tab_pref_parse_clamps_unknown_view_mode_to_grid() {
+        let t = TabPref::parse_line("file:///x|name|asc|invalid").expect("parse");
+        assert_eq!(t.view_mode, "grid");
+    }
+
+    #[test]
+    fn tab_pref_to_line_emits_canonical_format() {
+        let t = TabPref {
+            uri: "file:///x".into(),
+            sort_key: "size".into(),
+            reversed: true,
+            view_mode: "list".into(),
+        };
+        assert_eq!(t.to_line(), "file:///x|size|desc|list");
+    }
+
+    // ---- thumbnail_policy_to_str / from_str -----------------------
+
+    #[test]
+    fn thumbnail_policy_round_trip_all_variants() {
+        for v in [
+            THUMB_POLICY_ALWAYS,
+            THUMB_POLICY_LOCAL,
+            THUMB_POLICY_NEVER,
+        ] {
+            let s = thumbnail_policy_to_str(v);
+            assert_eq!(thumbnail_policy_from_str(s), v);
+        }
+    }
+
+    #[test]
+    fn thumbnail_policy_unknown_string_defaults_to_always() {
+        assert_eq!(thumbnail_policy_from_str(""), THUMB_POLICY_ALWAYS);
+        assert_eq!(thumbnail_policy_from_str("nope"), THUMB_POLICY_ALWAYS);
+        // Capitalisation matters — "Local" is not "local".
+        assert_eq!(thumbnail_policy_from_str("Local"), THUMB_POLICY_ALWAYS);
+    }
+
+    // ---- push_path_history ----------------------------------------
+
+    #[test]
+    #[serial_test::serial]
+    fn push_path_history_empty_string_no_op() {
+        ensure_gtk();
+        let app = fresh_app("phist_empty");
+        app.push_path_history("");
+        assert!(app.path_history().is_empty());
+        // Whitespace-only strings are also rejected (push trims first).
+        app.push_path_history("   ");
+        assert!(app.path_history().is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_path_history_first_insert() {
+        ensure_gtk();
+        let app = fresh_app("phist_first");
+        app.push_path_history("/home/foo");
+        assert_eq!(app.path_history(), vec!["/home/foo".to_string()]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_path_history_duplicate_at_head_no_op() {
+        ensure_gtk();
+        let app = fresh_app("phist_duphead");
+        app.push_path_history("/home/foo");
+        app.push_path_history("/home/foo");
+        assert_eq!(app.path_history(), vec!["/home/foo".to_string()]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_path_history_duplicate_elsewhere_moves_to_head() {
+        ensure_gtk();
+        let app = fresh_app("phist_dupmid");
+        app.push_path_history("/a");
+        app.push_path_history("/b");
+        app.push_path_history("/c");
+        // Re-pushing /a moves it to the head, deduplicating the prior copy.
+        app.push_path_history("/a");
+        assert_eq!(
+            app.path_history(),
+            vec!["/a".to_string(), "/c".to_string(), "/b".to_string()]
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn push_path_history_caps_at_path_history_max() {
+        ensure_gtk();
+        let app = fresh_app("phist_cap");
+        for i in 0..=PATH_HISTORY_MAX {
+            app.push_path_history(&format!("/dir-{i}"));
+        }
+        let list = app.path_history();
+        assert_eq!(list.len(), PATH_HISTORY_MAX);
+        // Most recent push at the head.
+        assert_eq!(list[0], format!("/dir-{}", PATH_HISTORY_MAX));
+        // Oldest entry was dropped.
+        assert!(!list.contains(&"/dir-0".to_string()));
+    }
+
+    // ---- set_recents_cap clamping ---------------------------------
+
+    #[test]
+    #[serial_test::serial]
+    fn set_recents_cap_clamps_below_min() {
+        ensure_gtk();
+        let app = fresh_app("cap_min");
+        app.set_recents_cap(0);
+        assert_eq!(app.recents_cap(), RECENTS_MIN);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn set_recents_cap_clamps_above_max() {
+        ensure_gtk();
+        let app = fresh_app("cap_max");
+        app.set_recents_cap(9999);
+        assert_eq!(app.recents_cap(), RECENTS_MAX);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn set_recents_cap_truncates_existing_list_and_returns_true() {
+        ensure_gtk();
+        let app = fresh_app("cap_trunc");
+        // Raise the cap, push a handful of uris, then shrink the cap below
+        // the current length and verify the function reports a truncation.
+        app.set_recents_cap(RECENTS_MAX);
+        for i in 0..5 {
+            app.push_recent_uri(&format!("file:///r-{i}"));
+        }
+        assert_eq!(app.recent_uris().len(), 5);
+        // 5 entries → cap=2: must shorten.
+        let shortened = app.set_recents_cap(2);
+        assert!(shortened);
+        assert_eq!(app.recent_uris().len(), 2);
+        // Raising the cap with no further pushes leaves the list alone
+        // and reports no shortening occurred.
+        let shortened2 = app.set_recents_cap(10);
+        assert!(!shortened2);
+        assert_eq!(app.recent_uris().len(), 2);
+    }
+
+    // ---- set_thumbnail_cache_size clamping ------------------------
+
+    #[test]
+    #[serial_test::serial]
+    fn set_thumbnail_cache_size_clamps_to_bounds() {
+        ensure_gtk();
+        let app = fresh_app("thumb_cache");
+        app.set_thumbnail_cache_size(0);
+        assert_eq!(app.thumbnail_cache_size(), THUMB_CACHE_MIN);
+        app.set_thumbnail_cache_size(usize::MAX);
+        assert_eq!(app.thumbnail_cache_size(), THUMB_CACHE_MAX);
+        // A value inside bounds is accepted unchanged.
+        let mid = THUMB_CACHE_MIN + 1;
+        app.set_thumbnail_cache_size(mid);
+        assert_eq!(app.thumbnail_cache_size(), mid);
+    }
+
+    // ---- set_recents_enabled gating push_recent_uri ---------------
+
+    #[test]
+    #[serial_test::serial]
+    fn push_recent_uri_returns_false_when_recents_disabled() {
+        ensure_gtk();
+        let app = fresh_app("disabled");
+        // fresh_app turns recents on; flip it back off to exercise the gate.
+        app.set_recents_enabled(false);
+        // Pre-populate via the imp directly so we can detect non-mutation.
+        // (Public API would also be gated.)
+        assert!(!app.push_recent_uri("file:///should-not-be-added"));
+        assert!(app.recent_uris().is_empty());
     }
 }
