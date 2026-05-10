@@ -728,9 +728,47 @@ impl WrenSidebar {
         self.reload_volumes();
     }
 
-    /// No-op: the sidebar uses SelectionMode::None so there is no selection
-    /// highlight to track. Kept for API compatibility with callers in window/.
-    pub fn set_location(&self, _file: &gio::File) {}
+    /// Highlight the row whose URI matches `file`, removing the highlight
+    /// from every other row. Picks an exact `gio::File::equal` match if
+    /// one exists, otherwise the deepest ancestor by prefix. The list box
+    /// uses SelectionMode::None (so click-to-deselect noise stays out of
+    /// the way), so we drive the cue via a `.wren-active-place` CSS class.
+    pub fn set_location(&self, file: &gio::File) {
+        let imp = self.imp();
+        let uris = imp.place_uris.borrow();
+
+        // Score each non-empty entry: 2 for an exact match, 1 + path-len
+        // for a prefix match, 0 otherwise. Pick the highest-scoring index.
+        let mut best: Option<(usize, usize)> = None;
+        for (i, uri) in uris.iter().enumerate() {
+            if uri.is_empty() {
+                continue;
+            }
+            let other = gio::File::for_uri(uri);
+            if file.equal(&other) {
+                best = Some((i, usize::MAX));
+                break;
+            }
+            if file.has_prefix(&other) {
+                let depth = other.uri().len();
+                match best {
+                    Some((_, d)) if d >= depth => {}
+                    _ => best = Some((i, depth)),
+                }
+            }
+        }
+
+        let target_idx = best.map(|(i, _)| i as i32);
+        let mut idx = 0;
+        while let Some(row) = imp.list_box.row_at_index(idx) {
+            if Some(idx) == target_idx {
+                row.add_css_class("wren-active-place");
+            } else {
+                row.remove_css_class("wren-active-place");
+            }
+            idx += 1;
+        }
+    }
 
     /// Attach a DropTarget so dragging files onto the row moves/copies them
     /// into the URI. trash:/// trashes the dropped files; recent:/// and

@@ -247,6 +247,17 @@ button.wren-sidebar-toggle:hover {
   font-style: italic;
 }
 
+/* Highlights the sidebar row whose URI matches the current tab's
+   location. SelectionMode::None on the list box rules out the standard
+   :selected pseudo, so this is the only cue. */
+row.wren-active-place {
+  background-color: alpha(@accent_bg_color, 0.18);
+  color: @accent_color;
+}
+row.wren-active-place:hover {
+  background-color: alpha(@accent_bg_color, 0.26);
+}
+
 button.wren-volume-eject {
   min-width: 0;
   min-height: 0;
