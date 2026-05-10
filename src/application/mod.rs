@@ -65,6 +65,28 @@ pub const THUMB_CACHE_DEFAULT: usize = 256;
 pub const THUMB_CACHE_MIN: usize = 64;
 pub const THUMB_CACHE_MAX: usize = 1024;
 
+/// Thumbnail policy values. u8 instead of an enum so `Cell<u8>` works
+/// with `Copy` semantics matching the existing prefs.
+pub const THUMB_POLICY_ALWAYS: u8 = 0;
+pub const THUMB_POLICY_LOCAL: u8 = 1;
+pub const THUMB_POLICY_NEVER: u8 = 2;
+
+pub fn thumbnail_policy_to_str(v: u8) -> &'static str {
+    match v {
+        THUMB_POLICY_LOCAL => "local",
+        THUMB_POLICY_NEVER => "never",
+        _ => "always",
+    }
+}
+
+pub fn thumbnail_policy_from_str(s: &str) -> u8 {
+    match s {
+        "local" => THUMB_POLICY_LOCAL,
+        "never" => THUMB_POLICY_NEVER,
+        _ => THUMB_POLICY_ALWAYS,
+    }
+}
+
 glib::wrapper! {
     pub struct WrenApplication(ObjectSubclass<imp::WrenApplication>)
         @extends adw::Application, gtk4::Application, gio::Application,
@@ -201,6 +223,22 @@ impl WrenApplication {
         let v = v.clamp(THUMB_CACHE_MIN, THUMB_CACHE_MAX);
         self.imp().thumbnail_cache_size.set(v);
         crate::file_view::cell::set_thumbnail_cache_cap(v);
+        self.imp().save_settings();
+    }
+
+    pub fn thumbnail_policy(&self) -> u8 {
+        self.imp().thumbnail_policy.get()
+    }
+    /// Set the thumbnail policy (always / local / never). Pushes the
+    /// new value to the cell module's thread-local gate, then persists.
+    /// Caller is responsible for refreshing visible tabs.
+    pub fn set_thumbnail_policy(&self, v: u8) {
+        let v = match v {
+            THUMB_POLICY_LOCAL | THUMB_POLICY_NEVER => v,
+            _ => THUMB_POLICY_ALWAYS,
+        };
+        self.imp().thumbnail_policy.set(v);
+        crate::file_view::cell::set_thumbnail_policy(v);
         self.imp().save_settings();
     }
 

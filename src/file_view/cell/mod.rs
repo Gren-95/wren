@@ -47,6 +47,22 @@ thread_local! {
     // here via set_thumbnail_cache_cap; default matches THUMB_CACHE_DEFAULT.
     static TEXTURE_CACHE_CAP: std::cell::Cell<usize> =
         std::cell::Cell::new(crate::application::THUMB_CACHE_DEFAULT);
+
+    // Tri-state thumbnail policy. Read on every cell bind; written from
+    // app startup and the Settings dialog.
+    static THUMB_POLICY: std::cell::Cell<u8> =
+        std::cell::Cell::new(crate::application::THUMB_POLICY_ALWAYS);
+}
+
+/// Update the thumbnail policy. Called at startup and from the Settings
+/// dialog. Cell binds read this on every render to decide whether to
+/// resolve `thumbnail::path` at all.
+pub fn set_thumbnail_policy(policy: u8) {
+    THUMB_POLICY.with(|c| c.set(policy));
+}
+
+pub fn thumbnail_policy() -> u8 {
+    THUMB_POLICY.with(|c| c.get())
 }
 
 /// Update the texture cache cap and trim immediately if the live cache
@@ -126,6 +142,19 @@ fn cached_texture(path: &PathBuf, px: i32) -> Option<gtk4::gdk::Texture> {
     Some(tex)
 }
 
+// Decide whether to resolve a thumbnail for `file_obj` under the current
+// policy. "Local" uses the cheap uri-scheme heuristic — anything reachable
+// as `file://` is considered local (USB drives mounted under /run/media
+// included). The expensive cases are GVFS schemes (sftp://, dav://,
+// google-drive://, mtp://, …) which are skipped.
+fn thumbnails_allowed_for(file_obj: &FileObject) -> bool {
+    match thumbnail_policy() {
+        crate::application::THUMB_POLICY_NEVER => false,
+        crate::application::THUMB_POLICY_LOCAL => file_obj.file().has_uri_scheme("file"),
+        _ => true,
+    }
+}
+
 pub fn clear_thumbnail_cache() {
     PIXBUF_CACHE.with(|c| c.borrow_mut().clear());
     TEXTURE_CACHE.with(|c| c.borrow_mut().clear());
@@ -159,10 +188,12 @@ impl WrenFileCell {
         // and icon alike), so gdk_paintable_snapshot is called with (px, px).
         imp.icon.set_pixel_size(px);
 
-        if let Some(thumb_path) = file_obj.thumbnail_path() {
-            if let Some(texture) = cached_texture(&thumb_path, px) {
-                imp.icon.set_paintable(Some(&texture));
-                return;
+        if thumbnails_allowed_for(file_obj) {
+            if let Some(thumb_path) = file_obj.thumbnail_path() {
+                if let Some(texture) = cached_texture(&thumb_path, px) {
+                    imp.icon.set_paintable(Some(&texture));
+                    return;
+                }
             }
         }
 
