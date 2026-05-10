@@ -36,6 +36,13 @@ pub struct WrenApplication {
     pub show_copy_location: Cell<bool>,
     pub bookmarks_enabled: Cell<bool>,
     pub folders_first: Cell<bool>,
+    pub show_col_type: Cell<bool>,
+    pub show_col_size: Cell<bool>,
+    pub show_col_modified: Cell<bool>,
+    pub show_col_permissions: Cell<bool>,
+    pub show_col_owner: Cell<bool>,
+    pub show_col_group: Cell<bool>,
+    pub show_col_accessed: Cell<bool>,
 }
 
 impl Default for WrenApplication {
@@ -68,6 +75,13 @@ impl Default for WrenApplication {
             show_copy_location: Cell::new(true),
             bookmarks_enabled: Cell::new(true),
             folders_first: Cell::new(true),
+            show_col_type: Cell::new(true),
+            show_col_size: Cell::new(true),
+            show_col_modified: Cell::new(true),
+            show_col_permissions: Cell::new(false),
+            show_col_owner: Cell::new(false),
+            show_col_group: Cell::new(false),
+            show_col_accessed: Cell::new(false),
         }
     }
 }
@@ -208,6 +222,27 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("Sort", "folders_first") {
                 self.folders_first.set(v);
             }
+            if let Ok(v) = kf.boolean("ListColumns", "type") {
+                self.show_col_type.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "size") {
+                self.show_col_size.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "modified") {
+                self.show_col_modified.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "permissions") {
+                self.show_col_permissions.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "owner") {
+                self.show_col_owner.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "group") {
+                self.show_col_group.set(v);
+            }
+            if let Ok(v) = kf.boolean("ListColumns", "accessed") {
+                self.show_col_accessed.set(v);
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -268,6 +303,13 @@ impl WrenApplication {
         kf.set_boolean("ContextMenu", "show_copy_location", self.show_copy_location.get());
         kf.set_boolean("Sidebar", "bookmarks_enabled", self.bookmarks_enabled.get());
         kf.set_boolean("Sort", "folders_first", self.folders_first.get());
+        kf.set_boolean("ListColumns", "type", self.show_col_type.get());
+        kf.set_boolean("ListColumns", "size", self.show_col_size.get());
+        kf.set_boolean("ListColumns", "modified", self.show_col_modified.get());
+        kf.set_boolean("ListColumns", "permissions", self.show_col_permissions.get());
+        kf.set_boolean("ListColumns", "owner", self.show_col_owner.get());
+        kf.set_boolean("ListColumns", "group", self.show_col_group.get());
+        kf.set_boolean("ListColumns", "accessed", self.show_col_accessed.get());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

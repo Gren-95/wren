@@ -79,6 +79,51 @@
             </style>
           </object>
         </child>
+        <child>
+          <object class="GtkLabel" id="permissions">
+            <property name="visible">false</property>
+            <property name="width-request">100</property>
+            <property name="xalign">1</property>
+            <style>
+              <class name="dim-label"/>
+              <class name="monospace"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="owner">
+            <property name="visible">false</property>
+            <property name="width-request">100</property>
+            <property name="xalign">1</property>
+            <property name="ellipsize">end</property>
+            <property name="width-chars">1</property>
+            <style>
+              <class name="dim-label"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="group">
+            <property name="visible">false</property>
+            <property name="width-request">100</property>
+            <property name="xalign">1</property>
+            <property name="ellipsize">end</property>
+            <property name="width-chars">1</property>
+            <style>
+              <class name="dim-label"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="accessed">
+            <property name="visible">false</property>
+            <property name="width-request">120</property>
+            <property name="xalign">1</property>
+            <style>
+              <class name="dim-label"/>
+            </style>
+          </object>
+        </child>
       </object>
     </child>
   </template>
