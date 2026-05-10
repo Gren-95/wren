@@ -398,8 +398,7 @@ impl WrenSidebar {
 }
 
 fn read_gtk_bookmarks() -> Vec<(String, String)> {
-    let mut path = glib::home_dir();
-    path.push(".config");
+    let mut path = glib::user_config_dir();
     path.push("gtk-3.0");
     path.push("bookmarks");
 
