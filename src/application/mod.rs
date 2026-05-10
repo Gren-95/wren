@@ -241,6 +241,54 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn confirm_move_to_trash(&self) -> bool { self.imp().confirm_move_to_trash.get() }
+    pub fn set_confirm_move_to_trash(&self, v: bool) {
+        self.imp().confirm_move_to_trash.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_full_path_in_title(&self) -> bool { self.imp().show_full_path_in_title.get() }
+    pub fn set_show_full_path_in_title(&self, v: bool) {
+        self.imp().show_full_path_in_title.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn new_tab_use_defaults(&self) -> bool { self.imp().new_tab_use_defaults.get() }
+    pub fn set_new_tab_use_defaults(&self, v: bool) {
+        self.imp().new_tab_use_defaults.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn new_tab_default_path(&self) -> String { self.imp().new_tab_default_path.borrow().clone() }
+    pub fn set_new_tab_default_path(&self, v: &str) {
+        *self.imp().new_tab_default_path.borrow_mut() = v.to_string();
+        self.imp().save_settings();
+    }
+
+    pub fn new_tab_default_view(&self) -> String { self.imp().new_tab_default_view.borrow().clone() }
+    pub fn set_new_tab_default_view(&self, v: &str) {
+        *self.imp().new_tab_default_view.borrow_mut() = v.to_string();
+        self.imp().save_settings();
+    }
+
+    pub fn new_tab_default_sort_key(&self) -> String { self.imp().new_tab_default_sort_key.borrow().clone() }
+    pub fn set_new_tab_default_sort_key(&self, v: &str) {
+        *self.imp().new_tab_default_sort_key.borrow_mut() = v.to_string();
+        self.imp().save_settings();
+    }
+
+    pub fn new_tab_default_sort_reversed(&self) -> bool { self.imp().new_tab_default_sort_reversed.get() }
+    pub fn set_new_tab_default_sort_reversed(&self, v: bool) {
+        self.imp().new_tab_default_sort_reversed.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn new_tab_default_zoom(&self) -> i32 { self.imp().new_tab_default_zoom.get() }
+    pub fn set_new_tab_default_zoom(&self, v: i32) {
+        self.imp().new_tab_default_zoom.set(v.clamp(1, 5));
+        self.imp().save_settings();
+    }
+
     /// Push `uri` to the front of the recents list (MRU), deduplicating any
     /// prior occurrence and capping at `RECENTS_MAX`. Returns true when the
     /// list changed (caller may want to refresh the sidebar).

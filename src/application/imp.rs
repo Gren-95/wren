@@ -36,6 +36,14 @@ pub struct WrenApplication {
     pub show_copy_location: Cell<bool>,
     pub bookmarks_enabled: Cell<bool>,
     pub folders_first: Cell<bool>,
+    pub confirm_move_to_trash: Cell<bool>,
+    pub show_full_path_in_title: Cell<bool>,
+    pub new_tab_use_defaults: Cell<bool>,
+    pub new_tab_default_path: RefCell<String>,
+    pub new_tab_default_view: RefCell<String>,
+    pub new_tab_default_sort_key: RefCell<String>,
+    pub new_tab_default_sort_reversed: Cell<bool>,
+    pub new_tab_default_zoom: Cell<i32>,
 }
 
 impl Default for WrenApplication {
@@ -68,6 +76,14 @@ impl Default for WrenApplication {
             show_copy_location: Cell::new(true),
             bookmarks_enabled: Cell::new(true),
             folders_first: Cell::new(true),
+            confirm_move_to_trash: Cell::new(true),
+            show_full_path_in_title: Cell::new(false),
+            new_tab_use_defaults: Cell::new(false),
+            new_tab_default_path: RefCell::new(String::new()),
+            new_tab_default_view: RefCell::new("grid".to_string()),
+            new_tab_default_sort_key: RefCell::new("name".to_string()),
+            new_tab_default_sort_reversed: Cell::new(false),
+            new_tab_default_zoom: Cell::new(3),
         }
     }
 }
@@ -208,6 +224,36 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("Sort", "folders_first") {
                 self.folders_first.set(v);
             }
+            if let Ok(v) = kf.boolean("Trash", "confirm_move_to_trash") {
+                self.confirm_move_to_trash.set(v);
+            }
+            if let Ok(v) = kf.boolean("Window", "show_full_path_in_title") {
+                self.show_full_path_in_title.set(v);
+            }
+            if let Ok(v) = kf.boolean("NewTab", "use_defaults") {
+                self.new_tab_use_defaults.set(v);
+            }
+            if let Ok(v) = kf.string("NewTab", "default_path") {
+                *self.new_tab_default_path.borrow_mut() = v.to_string();
+            }
+            if let Ok(v) = kf.string("NewTab", "default_view") {
+                let s = v.to_string();
+                if s == "list" || s == "grid" {
+                    *self.new_tab_default_view.borrow_mut() = s;
+                }
+            }
+            if let Ok(v) = kf.string("NewTab", "default_sort_key") {
+                let s = v.to_string();
+                if matches!(s.as_str(), "name" | "size" | "date" | "type") {
+                    *self.new_tab_default_sort_key.borrow_mut() = s;
+                }
+            }
+            if let Ok(v) = kf.boolean("NewTab", "default_sort_reversed") {
+                self.new_tab_default_sort_reversed.set(v);
+            }
+            if let Ok(v) = kf.integer("NewTab", "default_zoom") {
+                self.new_tab_default_zoom.set(v.clamp(1, 5));
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -268,6 +314,18 @@ impl WrenApplication {
         kf.set_boolean("ContextMenu", "show_copy_location", self.show_copy_location.get());
         kf.set_boolean("Sidebar", "bookmarks_enabled", self.bookmarks_enabled.get());
         kf.set_boolean("Sort", "folders_first", self.folders_first.get());
+        kf.set_boolean("Trash", "confirm_move_to_trash", self.confirm_move_to_trash.get());
+        kf.set_boolean("Window", "show_full_path_in_title", self.show_full_path_in_title.get());
+        kf.set_boolean("NewTab", "use_defaults", self.new_tab_use_defaults.get());
+        kf.set_string("NewTab", "default_path", &self.new_tab_default_path.borrow());
+        kf.set_string("NewTab", "default_view", &self.new_tab_default_view.borrow());
+        kf.set_string("NewTab", "default_sort_key", &self.new_tab_default_sort_key.borrow());
+        kf.set_boolean(
+            "NewTab",
+            "default_sort_reversed",
+            self.new_tab_default_sort_reversed.get(),
+        );
+        kf.set_integer("NewTab", "default_zoom", self.new_tab_default_zoom.get());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }

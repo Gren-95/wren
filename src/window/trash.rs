@@ -12,9 +12,10 @@ use gio::prelude::FileExtManual;
 impl WrenWindow {
     /// Move selection to the Trash. Inside `trash:///` this is rerouted
     /// to `delete_permanently()` so the Delete key still does the
-    /// expected thing (matches Nautilus behaviour). No confirmation
-    /// dialog: the trash itself is the safety net, and the toast that
-    /// fires on success carries an "Undo" button.
+    /// expected thing (matches Nautilus behaviour). When the user has
+    /// "Confirm before move-to-trash" enabled, an AlertDialog gates the
+    /// operation; otherwise the trash itself is the safety net and the
+    /// toast that fires on success carries an "Undo" button.
     pub fn move_to_trash(&self) {
         if self.current_location_is_trash() {
             self.delete_permanently();
@@ -24,12 +25,63 @@ impl WrenWindow {
         if files.is_empty() {
             return;
         }
-        glib::spawn_future_local(glib::clone!(
-            #[weak(rename_to = window)] self,
-            async move {
-                window.do_trash_files(files).await;
-            }
-        ));
+
+        let confirm = self
+            .application()
+            .and_downcast::<crate::application::WrenApplication>()
+            .map_or(true, |a| a.confirm_move_to_trash());
+        if !confirm {
+            glib::spawn_future_local(glib::clone!(
+                #[weak(rename_to = window)] self,
+                async move {
+                    window.do_trash_files(files).await;
+                }
+            ));
+            return;
+        }
+
+        let count = files.len();
+        let (title, body) = if count == 1 {
+            let name = files[0]
+                .basename()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (
+                "Move to Trash?".to_string(),
+                format!("Move \u{201C}{name}\u{201D} to Trash?"),
+            )
+        } else {
+            (
+                "Move to Trash?".to_string(),
+                format!("Move {count} items to Trash?"),
+            )
+        };
+        let dialog = adw::AlertDialog::new(Some(&title), Some(&body));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("trash", "Move to Trash");
+        dialog.set_response_appearance("trash", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let files_clone = files;
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)] self,
+                move |_, response| {
+                    if response != "trash" {
+                        return;
+                    }
+                    let files = files_clone.clone();
+                    glib::spawn_future_local(glib::clone!(
+                        #[weak] window,
+                        async move {
+                            window.do_trash_files(files).await;
+                        }
+                    ));
+                }
+            ),
+        );
+        dialog.present(Some(self));
     }
 
     /// Permanently delete every item in `trash:///` after confirmation.
