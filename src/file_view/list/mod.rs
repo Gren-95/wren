@@ -29,6 +29,7 @@ fn make_row_factory(
     icon_size: Rc<Cell<u32>>,
     cut_uris: Rc<RefCell<HashSet<String>>>,
     show_extensions: bool,
+    show_hidden: Rc<Cell<bool>>,
     bound_rows: BoundRows,
 ) -> gtk4::SignalListItemFactory {
     let factory = gtk4::SignalListItemFactory::new();
@@ -119,7 +120,7 @@ fn make_row_factory(
             bound_rows.borrow_mut().insert(key, row.downgrade());
 
             let is_cut = cut_uris.borrow().contains(&file_obj.file().uri().to_string());
-            row.bind(&file_obj, icon_size.get(), show_extensions);
+            row.bind(&file_obj, icon_size.get(), show_extensions, show_hidden.get());
             if is_cut {
                 row.set_opacity(0.5);
             }
@@ -180,6 +181,7 @@ impl WrenFileList {
             Rc::clone(&imp.icon_size),
             Rc::clone(&imp.cut_uris),
             imp.show_extensions.get(),
+            Rc::clone(&imp.show_hidden),
             Rc::clone(&imp.bound_rows),
         )));
     }
@@ -191,6 +193,28 @@ impl WrenFileList {
             Rc::clone(&imp.icon_size),
             Rc::clone(&imp.cut_uris),
             show,
+            Rc::clone(&imp.show_hidden),
+            Rc::clone(&imp.bound_rows),
+        )));
+    }
+
+    /// Update the live show_hidden flag the row factory reads at bind
+    /// time. Called by the window when the user toggles `win.toggle-hidden`.
+    pub fn set_show_hidden(&self, show: bool) {
+        let imp = imp::WrenFileList::from_obj(self);
+        imp.show_hidden.set(show);
+    }
+
+    /// Force every visible row to rebind. Used after a global preference
+    /// change (folder count policy) so the new behaviour shows up without
+    /// scrolling.
+    pub fn rebind_visible_rows(&self) {
+        let imp = imp::WrenFileList::from_obj(self);
+        imp.list_view.set_factory(Some(&make_row_factory(
+            Rc::clone(&imp.icon_size),
+            Rc::clone(&imp.cut_uris),
+            imp.show_extensions.get(),
+            Rc::clone(&imp.show_hidden),
             Rc::clone(&imp.bound_rows),
         )));
     }
@@ -482,6 +506,7 @@ mod imp {
         pub list_view: gtk4::ListView,
         pub cut_uris: Rc<RefCell<HashSet<String>>>,
         pub show_extensions: Cell<bool>,
+        pub show_hidden: Rc<Cell<bool>>,
         pub sort_buttons: RefCell<Vec<gtk4::Button>>,
         pub icon_size: Rc<Cell<u32>>,
         pub bound_rows: BoundRows,
@@ -497,6 +522,7 @@ mod imp {
                 list_view: Default::default(),
                 cut_uris: Rc::new(RefCell::new(HashSet::new())),
                 show_extensions: Cell::new(true),
+                show_hidden: Rc::new(Cell::new(false)),
                 sort_buttons: RefCell::new(Vec::new()),
                 icon_size: Rc::new(Cell::new(24)),
                 bound_rows: Rc::new(RefCell::new(HashMap::new())),
@@ -527,6 +553,7 @@ mod imp {
                 Rc::clone(&self.icon_size),
                 Rc::clone(&self.cut_uris),
                 true,
+                Rc::clone(&self.show_hidden),
                 Rc::clone(&self.bound_rows),
             )));
             // Rubber-band selection in list view: GTK4 routes drag-from-row

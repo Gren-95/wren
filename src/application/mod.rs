@@ -204,6 +204,22 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn folder_count_policy(&self) -> String {
+        self.imp().folder_count_policy.borrow().clone()
+    }
+    /// Set the folder item-count policy. Accepts "always" | "local" | "never".
+    /// Pushes the new value to the row module's thread-local so in-flight
+    /// enumerations can observe the change at their next checkpoint.
+    pub fn set_folder_count_policy(&self, v: &str) {
+        let v = match v {
+            "local" | "never" => v,
+            _ => "always",
+        };
+        *self.imp().folder_count_policy.borrow_mut() = v.to_string();
+        crate::file_view::row::set_folder_count_policy(v);
+        self.imp().save_settings();
+    }
+
     pub fn show_duplicate(&self) -> bool { self.imp().show_duplicate.get() }
     pub fn set_show_duplicate(&self, v: bool) {
         self.imp().show_duplicate.set(v);

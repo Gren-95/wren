@@ -23,6 +23,11 @@ pub struct WrenFileRow {
 
     pub icon_size: std::cell::Cell<u32>,
     pub bound_file: std::cell::RefCell<Option<crate::model::FileObject>>,
+    /// URI the most-recent `bind_folder_count` was started against. The
+    /// async future compares this on completion: if it differs, the row
+    /// has been recycled by GtkListView and we must not write a stale
+    /// count back into the now-different row.
+    pub pending_count_uri: std::cell::RefCell<Option<String>>,
 }
 
 #[glib::object_subclass]
