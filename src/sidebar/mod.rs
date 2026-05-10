@@ -166,6 +166,9 @@ impl WrenSidebar {
         else {
             return;
         };
+        if !app.recents_enabled() {
+            return;
+        }
         let recents = app.recent_uris();
         if recents.is_empty() {
             return;

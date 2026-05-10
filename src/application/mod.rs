@@ -3,8 +3,17 @@ mod imp;
 use adw::subclass::prelude::ObjectSubclassIsExt;
 use glib::Object;
 
-/// Maximum number of locations kept in the sidebar's Recent section.
-pub const RECENTS_MAX: usize = 10;
+/// Default number of locations kept in the sidebar's Recent section.
+pub const RECENTS_DEFAULT: usize = 10;
+/// Bounds for the user-configurable recents cap.
+pub const RECENTS_MIN: usize = 1;
+pub const RECENTS_MAX: usize = 50;
+
+/// Default size (entries) of the thumbnail texture cache.
+pub const THUMB_CACHE_DEFAULT: usize = 256;
+/// Bounds for the user-configurable thumbnail cache size.
+pub const THUMB_CACHE_MIN: usize = 64;
+pub const THUMB_CACHE_MAX: usize = 1024;
 
 glib::wrapper! {
     pub struct WrenApplication(ObjectSubclass<imp::WrenApplication>)
@@ -111,10 +120,47 @@ impl WrenApplication {
         self.imp().recent_uris.borrow().clone()
     }
 
+    pub fn recents_enabled(&self) -> bool { self.imp().recents_enabled.get() }
+    pub fn set_recents_enabled(&self, v: bool) {
+        self.imp().recents_enabled.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn recents_cap(&self) -> usize { self.imp().recents_cap.get() }
+    /// Set the maximum number of recents kept. Truncates the existing list
+    /// if it exceeds the new cap. Returns true if the list was shortened
+    /// (caller may want to refresh the sidebar).
+    pub fn set_recents_cap(&self, v: usize) -> bool {
+        let v = v.clamp(RECENTS_MIN, RECENTS_MAX);
+        self.imp().recents_cap.set(v);
+        let mut list = self.imp().recent_uris.borrow_mut();
+        let shortened = list.len() > v;
+        list.truncate(v);
+        drop(list);
+        self.imp().save_settings();
+        shortened
+    }
+
+    pub fn thumbnail_cache_size(&self) -> usize {
+        self.imp().thumbnail_cache_size.get()
+    }
+    /// Set the thumbnail texture cache size (entries). Clamps to the
+    /// configured bounds, persists, and trims the live cache so the
+    /// new limit is honoured immediately.
+    pub fn set_thumbnail_cache_size(&self, v: usize) {
+        let v = v.clamp(THUMB_CACHE_MIN, THUMB_CACHE_MAX);
+        self.imp().thumbnail_cache_size.set(v);
+        crate::file_view::cell::set_thumbnail_cache_cap(v);
+        self.imp().save_settings();
+    }
+
     /// Push `uri` to the front of the recents list (MRU), deduplicating any
     /// prior occurrence and capping at `RECENTS_MAX`. Returns true when the
     /// list changed (caller may want to refresh the sidebar).
     pub fn push_recent_uri(&self, uri: &str) -> bool {
+        if !self.imp().recents_enabled.get() {
+            return false;
+        }
         if uri.is_empty() {
             return false;
         }
@@ -124,7 +170,7 @@ impl WrenApplication {
         }
         list.retain(|u| u != uri);
         list.insert(0, uri.to_string());
-        list.truncate(RECENTS_MAX);
+        list.truncate(self.imp().recents_cap.get());
         drop(list);
         self.imp().save_settings();
         true

@@ -25,6 +25,9 @@ pub struct WrenApplication {
     pub animations_enabled: Cell<bool>,
     pub debug_logging: Cell<bool>,
     pub recent_uris: RefCell<Vec<String>>,
+    pub recents_enabled: Cell<bool>,
+    pub recents_cap: Cell<usize>,
+    pub thumbnail_cache_size: Cell<usize>,
 }
 
 impl Default for WrenApplication {
@@ -48,6 +51,9 @@ impl Default for WrenApplication {
             animations_enabled: Cell::new(true),
             debug_logging: Cell::new(false),
             recent_uris: RefCell::new(Vec::new()),
+            recents_enabled: Cell::new(false),
+            recents_cap: Cell::new(super::RECENTS_DEFAULT),
+            thumbnail_cache_size: Cell::new(super::THUMB_CACHE_DEFAULT),
         }
     }
 }
@@ -130,6 +136,17 @@ impl WrenApplication {
                     *self.color_scheme.borrow_mut() = s;
                 }
             }
+            if let Ok(v) = kf.boolean("Recents", "enabled") {
+                self.recents_enabled.set(v);
+            }
+            if let Ok(v) = kf.integer("Recents", "max") {
+                let clamped = (v as usize).clamp(super::RECENTS_MIN, super::RECENTS_MAX);
+                self.recents_cap.set(clamped);
+            }
+            if let Ok(v) = kf.integer("Performance", "thumbnail_cache_size") {
+                let clamped = (v as usize).clamp(super::THUMB_CACHE_MIN, super::THUMB_CACHE_MAX);
+                self.thumbnail_cache_size.set(clamped);
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -138,7 +155,7 @@ impl WrenApplication {
                 } else {
                     s.split('\t').map(|s| s.to_string()).collect()
                 };
-                uris.truncate(super::RECENTS_MAX);
+                uris.truncate(self.recents_cap.get());
                 *self.recent_uris.borrow_mut() = uris;
             }
         }
@@ -172,7 +189,14 @@ impl WrenApplication {
         kf.set_string("Appearance", "color_scheme", &self.color_scheme.borrow());
         kf.set_boolean("Appearance", "animations", self.animations_enabled.get());
         kf.set_boolean("General", "debug_logging", self.debug_logging.get());
+        kf.set_boolean("Recents", "enabled", self.recents_enabled.get());
+        kf.set_integer("Recents", "max", self.recents_cap.get() as i32);
         kf.set_string("Recents", "uris", &self.recent_uris.borrow().join("\t"));
+        kf.set_integer(
+            "Performance",
+            "thumbnail_cache_size",
+            self.thumbnail_cache_size.get() as i32,
+        );
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }
@@ -230,6 +254,7 @@ impl ApplicationImpl for WrenApplication {
         self.parent_startup();
         self.load_settings();
         crate::logging::set_enabled(self.debug_logging.get());
+        crate::file_view::cell::set_thumbnail_cache_cap(self.thumbnail_cache_size.get());
         let app = self.obj();
 
         let scheme = match self.color_scheme.borrow().as_str() {

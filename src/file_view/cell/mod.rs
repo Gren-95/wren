@@ -35,7 +35,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 const PIXBUF_CACHE_MAX: usize = 512;
-const TEXTURE_CACHE_MAX: usize = 512;
 
 thread_local! {
     static PIXBUF_CACHE: std::cell::RefCell<VecDeque<(PathBuf, gdk_pixbuf::Pixbuf)>> =
@@ -43,6 +42,26 @@ thread_local! {
 
     static TEXTURE_CACHE: std::cell::RefCell<VecDeque<(PathBuf, i32, gtk4::gdk::Texture)>> =
         std::cell::RefCell::new(VecDeque::new());
+
+    // Runtime-configurable cap for TEXTURE_CACHE. Settings dialog writes
+    // here via set_thumbnail_cache_cap; default matches THUMB_CACHE_DEFAULT.
+    static TEXTURE_CACHE_CAP: std::cell::Cell<usize> =
+        std::cell::Cell::new(crate::application::THUMB_CACHE_DEFAULT);
+}
+
+/// Update the texture cache cap and trim immediately if the live cache
+/// exceeds the new value. Called at startup and whenever the user changes
+/// the value in Settings.
+pub fn set_thumbnail_cache_cap(cap: usize) {
+    let cap = cap.max(1);
+    TEXTURE_CACHE_CAP.with(|c| c.set(cap));
+    TEXTURE_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > cap {
+            let evict = c.len() - cap;
+            c.drain(..evict);
+        }
+    });
 }
 
 // Cover-crop: scale so shorter dimension = px, then crop center to px×px.
@@ -95,8 +114,10 @@ fn cached_texture(path: &PathBuf, px: i32) -> Option<gtk4::gdk::Texture> {
 
     TEXTURE_CACHE.with(|c| {
         let mut c = c.borrow_mut();
-        if c.len() >= TEXTURE_CACHE_MAX {
-            let evict = c.len() / 4;
+        let cap = TEXTURE_CACHE_CAP.with(|cap| cap.get());
+        if c.len() >= cap {
+            // Evict a quarter of the cap (at least one) to amortise drops.
+            let evict = (cap / 4).max(1);
             c.drain(..evict);
         }
         c.push_back((path.clone(), px, tex.clone()));

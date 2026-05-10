@@ -1635,6 +1635,90 @@ impl WrenWindow {
         cache_group.add(&cache_row);
         page.add(&cache_group);
 
+        // Performance group
+        let performance_group = adw::PreferencesGroup::new();
+        performance_group.set_title("Performance");
+
+        let thumb_cache_row = adw::SpinRow::with_range(
+            crate::application::THUMB_CACHE_MIN as f64,
+            crate::application::THUMB_CACHE_MAX as f64,
+            64.0,
+        );
+        thumb_cache_row.set_title("Thumbnail cache size");
+        thumb_cache_row.set_subtitle("Number of scaled thumbnails kept in memory");
+        let initial_thumb_cap = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.thumbnail_cache_size())
+            .unwrap_or(crate::application::THUMB_CACHE_DEFAULT);
+        thumb_cache_row.set_value(initial_thumb_cap as f64);
+        thumb_cache_row.connect_value_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_thumbnail_cache_size(row.value() as usize);
+                }
+            }
+        ));
+        performance_group.add(&thumb_cache_row);
+        page.add(&performance_group);
+
+        // Sidebar group
+        let sidebar_group = adw::PreferencesGroup::new();
+        sidebar_group.set_title("Sidebar");
+
+        let recents_row = adw::SwitchRow::new();
+        recents_row.set_title("Recent locations");
+        recents_row.set_subtitle("Track and show recently visited folders in the sidebar");
+        let initial_recents = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.recents_enabled())
+            .unwrap_or(false);
+        recents_row.set_active(initial_recents);
+        let recents_max_row = adw::SpinRow::with_range(
+            crate::application::RECENTS_MIN as f64,
+            crate::application::RECENTS_MAX as f64,
+            1.0,
+        );
+        recents_max_row.set_title("Recent locations to keep");
+        recents_max_row.set_subtitle("Maximum entries shown under Recent in the sidebar");
+        let initial_cap = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.recents_cap())
+            .unwrap_or(crate::application::RECENTS_DEFAULT);
+        recents_max_row.set_value(initial_cap as f64);
+        recents_max_row.set_sensitive(initial_recents);
+
+        recents_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            #[weak] recents_max_row,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_recents_enabled(row.is_active());
+                }
+                recents_max_row.set_sensitive(row.is_active());
+                window.imp().sidebar.reload_recents();
+            }
+        ));
+        recents_max_row.connect_value_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    if app.set_recents_cap(row.value() as usize) {
+                        window.imp().sidebar.reload_recents();
+                    }
+                }
+            }
+        ));
+        sidebar_group.add(&recents_row);
+        sidebar_group.add(&recents_max_row);
+        page.add(&sidebar_group);
+
         // Advanced group
         let advanced_group = adw::PreferencesGroup::new();
         advanced_group.set_title("Advanced");
