@@ -1,3 +1,4 @@
+mod disk_usage;
 mod file_ops;
 mod imp;
 mod operations;
@@ -718,6 +719,11 @@ impl WrenWindow {
             // surface on the next bind. Cheaper to clear everything than
             // to walk the cache for prefix matches.
             crate::file_view::row::clear_folder_count_cache();
+            // Likewise drop the cached free/total for this filesystem —
+            // a reload usually follows a write op (paste, delete, new
+            // folder), so the next status-bar paint should show the
+            // post-op numbers, not the 5-second-old ones.
+            disk_usage::invalidate_for(&loc);
             self.load_location_for_tab(idx, loc);
         }
     }
@@ -3131,7 +3137,7 @@ impl WrenWindow {
         let Some(idx) = self.current_tab_index() else {
             return;
         };
-        let (n_total, n_selected, selected_bytes, label) = {
+        let (n_total, n_selected, selected_bytes, label, location) = {
             let tabs = self.imp().tabs.borrow();
             let Some(tab) = tabs.get(idx) else { return };
             let Some(model) = tab.dir_model.as_ref() else { return };
@@ -3151,9 +3157,10 @@ impl WrenWindow {
                     }
                 }
             }
-            (n_total, n_selected, bytes, tab.status_bar.clone())
+            let location = tab.navigation.current().cloned();
+            (n_total, n_selected, bytes, tab.status_bar.clone(), location)
         };
-        let text = if n_selected == 0 {
+        let base = if n_selected == 0 {
             format!("{n_total} item{}", if n_total == 1 { "" } else { "s" })
         } else if selected_bytes > 0 {
             format!(
@@ -3167,7 +3174,24 @@ impl WrenWindow {
                 if n_total == 1 { "" } else { "s" }
             )
         };
-        label.set_text(&text);
+
+        // Append free/total disk space when we already have a fresh cached
+        // entry; otherwise paint the base text now and refresh in the
+        // background. Skip the indicator entirely for virtual schemes that
+        // can't expose filesystem info — leave the existing text alone.
+        if let Some(loc) = location {
+            if let Some(usage) = disk_usage::cached_for(&loc) {
+                label.set_text(&format!("{}{}", base, disk_usage::format_suffix(&usage)));
+                label.set_tooltip_text(Some(&disk_usage::format_tooltip(&usage)));
+            } else {
+                label.set_text(&base);
+                label.set_tooltip_text(None);
+                disk_usage::refresh_async(loc, label, base);
+            }
+        } else {
+            label.set_text(&base);
+            label.set_tooltip_text(None);
+        }
     }
 
     pub fn update_undo_actions(&self) {
