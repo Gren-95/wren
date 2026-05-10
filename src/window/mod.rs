@@ -1350,6 +1350,13 @@ impl WrenWindow {
         open_section.append(Some("Open"), Some("win.open-selection"));
         open_section.append(Some("Open With…"), Some("win.open-with"));
         open_section.append(Some("Open in Terminal"), Some("win.open-in-terminal"));
+        // Search results live across the whole subtree, so the parent of
+        // any given hit isn't the user's current location. Surface a
+        // "Show in Folder" entry to jump there. Only relevant in search
+        // mode — in browse mode the parent is whatever's already visible.
+        if self.imp().searching.get() {
+            open_section.append(Some("Show in Folder"), Some("win.show-in-folder"));
+        }
         menu.append_section(None, &open_section);
 
         let edit_section = gio::Menu::new();
@@ -1616,6 +1623,48 @@ impl WrenWindow {
 
     /// Position of `file` in the current tab's filtered+sorted
     /// selection model, or None if absent (e.g. reload not yet done).
+    /// Navigate to the parent of the currently-selected file and select
+    /// the file in that view. Used by the "Show in Folder" entry on
+    /// search-result rows. Polls the model for up to 1s waiting for the
+    /// async load to populate, mirroring `new_from_template`'s pattern.
+    pub fn show_in_folder(&self) {
+        let Some(file) = self.selected_files().into_iter().next() else {
+            return;
+        };
+        let Some(parent) = file.parent() else {
+            self.show_toast("This location has no parent folder");
+            return;
+        };
+        // Close the search bar first — navigating to the parent loses
+        // the search context anyway, so dropping the bar avoids the
+        // ambiguous "search mode but viewing one folder" state.
+        let imp = self.imp();
+        imp.search_bar.set_search_mode(false);
+        imp.search_entry.set_text("");
+
+        self.navigate_to(parent);
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            #[strong] file,
+            async move {
+                for _ in 0..20 {
+                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                    let Some(pos) = window.find_in_current_model(&file) else { continue };
+                    let Some(idx) = window.current_tab_index() else { return };
+                    let tabs = window.imp().tabs.borrow();
+                    let Some(tab) = tabs.get(idx) else { return };
+                    let Some(model) = tab.dir_model.as_ref() else { return };
+                    model.selection.select_item(pos, true);
+                    tab.file_grid.scroll_to(pos, gtk4::ListScrollFlags::FOCUS);
+                    tab.file_list.scroll_to(pos, gtk4::ListScrollFlags::FOCUS);
+                    return;
+                }
+            }
+        ));
+    }
+
     fn find_in_current_model(&self, file: &gio::File) -> Option<u32> {
         let idx = self.current_tab_index()?;
         let tabs = self.imp().tabs.borrow();

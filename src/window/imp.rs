@@ -279,6 +279,10 @@ impl ObjectSubclass for WrenWindow {
             crate::wren_log!("action: {action_name}");
             win.show_properties();
         });
+        klass.install_action("win.show-in-folder", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
+            win.show_in_folder();
+        });
         klass.install_action("win.create-link", None, |win, action_name, _| {
             crate::wren_log!("action: {action_name}");
             win.create_link();
