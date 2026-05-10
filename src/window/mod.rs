@@ -275,6 +275,19 @@ impl WrenWindow {
                 }
             }
         }
+
+        // Refresh the banner so it reflects the newly-active tab's
+        // current directory writability.
+        let pair = {
+            let tabs = self.imp().tabs.borrow();
+            tabs.get(idx)
+                .and_then(|t| t.navigation.current().cloned().map(|l| (l, t.load_gen.get())))
+        };
+        if let Some((loc, load_gen)) = pair {
+            self.refresh_readonly_banner(idx, load_gen, loc);
+        } else {
+            self.hide_banner();
+        }
     }
 
     // ── Navigation ───────────────────────────────────────────────────────────
@@ -479,6 +492,7 @@ impl WrenWindow {
                         window.update_selection_actions();
                         window.start_dir_monitor(tab_idx, &location);
                         window.track_recent_location(&location);
+                        window.refresh_readonly_banner(tab_idx, load_gen, location.clone());
                     }
                     Err(e) => {
                         // Match the success-path guard: if this load was
@@ -500,6 +514,7 @@ impl WrenWindow {
                             }
                         }
                         content_stack.set_visible_child_name("error");
+                        window.hide_banner();
                     }
                 }
             }
@@ -2079,6 +2094,89 @@ impl WrenWindow {
 
     pub fn show_toast(&self, message: &str) {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
+    }
+
+    /// Show the shared in-window banner with `text`. If `button_label` is
+    /// `Some`, a button with that label is shown and `on_click` is invoked
+    /// when pressed. If `button_label` is `None`, no button is shown and
+    /// `on_click` is ignored. Replaces any previously-set callback.
+    pub fn show_banner<F: Fn(&Self) + 'static>(
+        &self,
+        text: &str,
+        button_label: Option<&str>,
+        on_click: Option<F>,
+    ) {
+        let imp = self.imp();
+        let banner: &adw::Banner = &imp.banner;
+        banner.set_title(text);
+        banner.set_button_label(button_label);
+        if let Some(old) = imp.banner_handler.borrow_mut().take() {
+            banner.disconnect(old);
+        }
+        if let (Some(_), Some(cb)) = (button_label, on_click) {
+            let id = banner.connect_button_clicked(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_| {
+                    cb(&window);
+                }
+            ));
+            *imp.banner_handler.borrow_mut() = Some(id);
+        }
+        banner.set_revealed(true);
+    }
+
+    pub fn hide_banner(&self) {
+        let imp = self.imp();
+        imp.banner.set_revealed(false);
+        if let Some(old) = imp.banner_handler.borrow_mut().take() {
+            imp.banner.disconnect(old);
+        }
+        imp.banner.set_button_label(None);
+    }
+
+    /// Asynchronously query the writability of `location` and toggle the
+    /// read-only banner accordingly. Called after every successful load
+    /// in `load_location_for_tab`.
+    fn refresh_readonly_banner(&self, tab_idx: usize, load_gen: u64, location: gio::File) {
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                let info = location
+                    .query_info_future(
+                        "access::can-write",
+                        gio::FileQueryInfoFlags::NONE,
+                        glib::Priority::DEFAULT,
+                    )
+                    .await;
+
+                // Only mutate UI if this load wasn't superseded and the
+                // tab is still the foreground tab.
+                let is_current = {
+                    let tabs = window.imp().tabs.borrow();
+                    tabs.get(tab_idx)
+                        .map_or(false, |t| t.load_gen.get() == load_gen)
+                };
+                if !is_current {
+                    return;
+                }
+                if window.current_tab_index() != Some(tab_idx) {
+                    return;
+                }
+
+                match info {
+                    Ok(info) if !info.boolean(gio::FILE_ATTRIBUTE_ACCESS_CAN_WRITE) => {
+                        window.show_banner::<fn(&Self)>(
+                            "This folder is read-only",
+                            None,
+                            None,
+                        );
+                    }
+                    _ => window.hide_banner(),
+                }
+            }
+        ));
     }
 
     /// Per-file failure dialog used by batch rename. A toast can only
