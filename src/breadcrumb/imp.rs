@@ -29,6 +29,14 @@ pub struct WrenBreadcrumbBar {
     /// The cell renderer; we need a handle so refresh_completions can
     /// update its `attributes` PangoAttrList for prefix dimming.
     pub completion_cell: RefCell<Option<gtk4::CellRendererText>>,
+    /// Up/Down navigation state through the persisted path history.
+    /// `None` means the user hasn't started navigating yet — first Up
+    /// captures the current entry text into `history_pending` and shows
+    /// history[0]. Resets to None on any non-arrow key.
+    pub history_index: RefCell<Option<usize>>,
+    /// Text the user had typed before pressing Up; restored when they
+    /// walk past the most-recent entry with Down.
+    pub history_pending: RefCell<String>,
 }
 
 #[glib::object_subclass]
@@ -79,6 +87,10 @@ impl ObjectImpl for WrenBreadcrumbBar {
         }
 
         // Update completion model + dimming on every text change.
+        // User typing also resets the history navigation index — only
+        // Up/Down (which set the text via set_text after stashing the
+        // index) should leave it set. We do that reset in the key
+        // controller below by gating which keys we consider "typing".
         self.path_entry.connect_changed(glib::clone!(
             #[weak(rename_to = imp_self)] self.obj(),
             move |entry| {
@@ -100,19 +112,34 @@ impl ObjectImpl for WrenBreadcrumbBar {
         // Escape leaves edit mode (when the popup is open the
         // completion machinery eats Escape itself; this fires only
         // when the popup is closed). Tab triggers path-component
-        // completion (see handle_tab_completion).
+        // completion (see handle_tab_completion). Up/Down walk the
+        // persisted MRU history (pending-buffer pattern: the first
+        // Up stashes whatever the user had typed; Down past index 0
+        // restores it).
         let key_ctrl = gtk4::EventControllerKey::new();
         key_ctrl.connect_key_pressed(glib::clone!(
             #[weak] obj,
             #[upgrade_or] glib::Propagation::Proceed,
             move |_, key, _, _| {
                 if key == gtk4::gdk::Key::Escape {
+                    obj.imp().history_index.replace(None);
                     obj.leave_edit_mode();
                     glib::Propagation::Stop
                 } else if key == gtk4::gdk::Key::Tab {
+                    obj.imp().history_index.replace(None);
                     obj.imp().handle_tab_completion();
                     glib::Propagation::Stop
+                } else if key == gtk4::gdk::Key::Up {
+                    obj.imp().history_step(-1);
+                    glib::Propagation::Stop
+                } else if key == gtk4::gdk::Key::Down {
+                    obj.imp().history_step(1);
+                    glib::Propagation::Stop
                 } else {
+                    // Any other key is "typing" — fall back to default
+                    // entry handling and reset history navigation so
+                    // the next Up starts from a fresh pending buffer.
+                    obj.imp().history_index.replace(None);
                     glib::Propagation::Proceed
                 }
             }
@@ -139,6 +166,7 @@ impl ObjectImpl for WrenBreadcrumbBar {
         focus_ctrl.connect_leave(glib::clone!(
             #[weak] obj,
             move |_| {
+                obj.imp().history_index.replace(None);
                 obj.leave_edit_mode();
                 if let Some(win) = obj
                     .root()
@@ -161,6 +189,60 @@ impl ObjectImpl for WrenBreadcrumbBar {
 }
 
 impl WrenBreadcrumbBar {
+    /// Walk the persisted path-bar history. `delta` is -1 for Up
+    /// (older), +1 for Down (newer). Implements the pending-buffer
+    /// pattern: the first Up stashes the current entry text into
+    /// `history_pending` and shows history[0]; subsequent Ups walk
+    /// back; Down walks forward; one step past index 0 restores the
+    /// pending text and clears the navigation state.
+    pub fn history_step(&self, delta: i32) {
+        let Some(win) = self.obj()
+            .root()
+            .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
+        else { return };
+        let Some(app) = win
+            .application()
+            .and_downcast::<crate::application::WrenApplication>()
+        else { return };
+        let history = app.path_history();
+        if history.is_empty() {
+            return;
+        }
+
+        let entry = &*self.path_entry;
+        let current = self.history_index.borrow().clone();
+
+        let new_index: Option<i32> = match (current, delta) {
+            (None, -1) => {
+                self.history_pending.replace(entry.text().to_string());
+                Some(0)
+            }
+            (None, _) => return,
+            (Some(i), -1) => {
+                let next = (i as i32 + 1).min(history.len() as i32 - 1);
+                Some(next)
+            }
+            (Some(i), 1) => {
+                let next = i as i32 - 1;
+                if next < 0 { None } else { Some(next) }
+            }
+            _ => return,
+        };
+
+        match new_index {
+            Some(i) => {
+                self.history_index.replace(Some(i as usize));
+                entry.set_text(&history[i as usize]);
+            }
+            None => {
+                self.history_index.replace(None);
+                let pending = self.history_pending.borrow().clone();
+                entry.set_text(&pending);
+            }
+        }
+        entry.set_position(-1);
+    }
+
     /// Repopulate the completion model from the current entry text and
     /// re-apply prefix dimming. Mirrors the body of Nautilus'
     /// `completer_get_completions_thread` + `set_prefix_dimming`,

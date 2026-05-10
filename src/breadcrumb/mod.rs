@@ -223,6 +223,18 @@ impl WrenBreadcrumbBar {
             .root()
             .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok())
         {
+            // Track the typed text — even non-existent paths are useful
+            // to recall (the user can edit and resubmit). Strict
+            // success-tracking would require threading the load future
+            // result back through the breadcrumb, which isn't worth
+            // the plumbing for an MRU history.
+            if let Some(app) = win
+                .application()
+                .and_downcast::<crate::application::WrenApplication>()
+            {
+                app.push_path_history(text);
+            }
+            self.imp().history_index.replace(None);
             win.navigate_to(file);
         }
     }

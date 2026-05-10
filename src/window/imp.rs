@@ -64,6 +64,14 @@ pub struct WrenWindow {
     /// trash op (otherwise toasts queue and the user clicks Undo on
     /// the wrong one).
     pub active_undo_toast: RefCell<Option<adw::Toast>>,
+    /// Session-only MRU of submitted search queries (Ctrl+F entry).
+    /// Front = most recent. Capped at SEARCH_HISTORY_MAX.
+    pub search_history: RefCell<Vec<String>>,
+    /// Current Up/Down nav index into `search_history`. None = not
+    /// navigating; first Up captures `search_history_pending` and
+    /// shows history[0].
+    pub search_history_index: RefCell<Option<usize>>,
+    pub search_history_pending: RefCell<String>,
 }
 
 impl Default for WrenWindow {
@@ -96,6 +104,9 @@ impl Default for WrenWindow {
             op_popover_box: gtk4::Box::new(gtk4::Orientation::Vertical, 4),
             op_handles: Default::default(),
             active_undo_toast: Default::default(),
+            search_history: Default::default(),
+            search_history_index: Default::default(),
+            search_history_pending: Default::default(),
         }
     }
 }
