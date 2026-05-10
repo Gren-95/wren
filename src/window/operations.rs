@@ -85,7 +85,13 @@ impl WrenWindow {
                                 {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete", file, None, &e);
-                                        window.show_toast(&format!("Could not delete: {e}"));
+                                        let msg = format!("Could not delete: {e}");
+                                        window.show_toast(&msg);
+                                        window.maybe_send_notification(
+                                            "wren-op-error",
+                                            "Operation failed",
+                                            &msg,
+                                        );
                                     }
                                     break 'op false;
                                 }
@@ -228,7 +234,13 @@ impl WrenWindow {
                             {
                                 if !e.matches(gio::IOErrorEnum::Cancelled) {
                                     log_err("replace (delete existing)", &dest_initial, None, &e);
-                                    window.show_toast(&format!("Could not replace: {e}"));
+                                    let msg = format!("Could not replace: {e}");
+                                    window.show_toast(&msg);
+                                    window.maybe_send_notification(
+                                        "wren-op-error",
+                                        "Operation failed",
+                                        &msg,
+                                    );
                                 }
                                 break 'op false;
                             }
@@ -256,7 +268,13 @@ impl WrenWindow {
                     {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
-                            window.show_toast(&format!("Could not paste: {e}"));
+                            let msg = format!("Could not paste: {e}");
+                            window.show_toast(&msg);
+                            window.maybe_send_notification(
+                                "wren-op-error",
+                                "Operation failed",
+                                &msg,
+                            );
                         }
                         break 'op false;
                     }
@@ -271,7 +289,13 @@ impl WrenWindow {
                         {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
-                                window.show_toast(&format!("Could not move: {e}"));
+                                let msg = format!("Could not move: {e}");
+                                window.show_toast(&msg);
+                                window.maybe_send_notification(
+                                    "wren-op-error",
+                                    "Operation failed",
+                                    &msg,
+                                );
                             }
                             break 'op false;
                         }
@@ -478,7 +502,13 @@ impl WrenWindow {
                             window.op_finish(&handle);
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("duplicate", &file, Some(&dest_file), &e);
-                                window.show_toast(&format!("Could not duplicate: {e}"));
+                                let msg = format!("Could not duplicate: {e}");
+                                window.show_toast(&msg);
+                                window.maybe_send_notification(
+                                    "wren-op-error",
+                                    "Operation failed",
+                                    &msg,
+                                );
                             }
                         }
                     }
@@ -556,7 +586,13 @@ impl WrenWindow {
                     {
                         if !e.matches(gio::IOErrorEnum::Cancelled) {
                             log_err(action, file, Some(&dest), &e);
-                            window.show_toast(&format!("Could not copy: {e}"));
+                            let msg = format!("Could not copy: {e}");
+                            window.show_toast(&msg);
+                            window.maybe_send_notification(
+                                "wren-op-error",
+                                "Operation failed",
+                                &msg,
+                            );
                         }
                         break 'op false;
                     }
@@ -571,7 +607,13 @@ impl WrenWindow {
                         {
                             if !e.matches(gio::IOErrorEnum::Cancelled) {
                                 log_err("delete (post-move)", file, None, &e);
-                                window.show_toast(&format!("Could not remove source: {e}"));
+                                let msg = format!("Could not remove source: {e}");
+                                window.show_toast(&msg);
+                                window.maybe_send_notification(
+                                    "wren-op-error",
+                                    "Operation failed",
+                                    &msg,
+                                );
                             }
                             break 'op false;
                         }

@@ -180,7 +180,13 @@ impl WrenWindow {
                                 {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("empty trash", f, None, &e);
-                                        window.show_toast(&format!("Could not delete: {e}"));
+                                        let msg = format!("Could not delete: {e}");
+                                        window.show_toast(&msg);
+                                        window.maybe_send_notification(
+                                            "wren-op-error",
+                                            "Operation failed",
+                                            &msg,
+                                        );
                                     }
                                     break 'op false;
                                 }
@@ -367,7 +373,13 @@ impl WrenWindow {
                     }
                     Err(e) => {
                         log_err("trash", file, None, &e);
-                        self.show_toast(&format!("Could not trash: {e}"));
+                        let msg = format!("Could not trash: {e}");
+                        self.show_toast(&msg);
+                        self.maybe_send_notification(
+                            "wren-op-error",
+                            "Operation failed",
+                            &msg,
+                        );
                     }
                 }
             }
@@ -472,7 +484,13 @@ impl WrenWindow {
                                 {
                                     if !e.matches(gio::IOErrorEnum::Cancelled) {
                                         log_err("delete (trash unsupported)", f, None, &e);
-                                        window.show_toast(&format!("Could not delete: {e}"));
+                                        let msg = format!("Could not delete: {e}");
+                                        window.show_toast(&msg);
+                                        window.maybe_send_notification(
+                                            "wren-op-error",
+                                            "Operation failed",
+                                            &msg,
+                                        );
                                     }
                                     break 'op false;
                                 }

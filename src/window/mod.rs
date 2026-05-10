@@ -16,7 +16,7 @@ use crate::application::{TabPref, WrenApplication};
 use crate::model::{DirectoryModel, FileObject, MimeCategory, SortKey};
 use crate::window::tab::TabState;
 pub use file_ops::{OpHandle, OpKind};
-use file_ops::{fmt_path, format_duration, log_err, log_op};
+use file_ops::{fmt_path, log_err, log_op};
 
 glib::wrapper! {
     pub struct WrenWindow(ObjectSubclass<imp::WrenWindow>)
@@ -664,6 +664,15 @@ impl WrenWindow {
                         }
                         content_stack.set_visible_child_name("error");
                         window.hide_banner();
+                        let path_label = location
+                            .path()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| location.uri().to_string());
+                        window.maybe_send_notification(
+                            "wren-load-error",
+                            "Could not open folder",
+                            &format!("{path_label}: {}", e.message()),
+                        );
                     }
                 }
             }
@@ -1286,7 +1295,13 @@ impl WrenWindow {
                                 }
                                 Err(e) => {
                                     log_err("mkdir", &new_dir, None, &e);
-                                    window.show_toast(&format!("Could not create folder: {e}"))
+                                    let msg = format!("Could not create folder: {e}");
+                                    window.show_toast(&msg);
+                                    window.maybe_send_notification(
+                                        "wren-op-error",
+                                        "Operation failed",
+                                        &msg,
+                                    );
                                 }
                             }
                         }
@@ -1611,7 +1626,13 @@ impl WrenWindow {
                     }
                     Err(e) => {
                         crate::wren_log!("rename failed: {}: {e}", fmt_path(&file));
-                        window.show_toast(&format!("Could not rename: {e}"));
+                        let msg = format!("Could not rename: {e}");
+                        window.show_toast(&msg);
+                        window.maybe_send_notification(
+                            "wren-op-error",
+                            "Operation failed",
+                            &msg,
+                        );
                     }
                 }
             }
@@ -2657,6 +2678,36 @@ impl WrenWindow {
         sidebar_group.add(&bookmarks_row);
         sidebar_page.add(&sidebar_group);
 
+        // Notifications group
+        let notif_group = adw::PreferencesGroup::new();
+        notif_group.set_title("Notifications");
+        notif_group.set_description(Some(
+            "Show desktop notifications when the window is unfocused.",
+        ));
+
+        let notif_row = adw::SwitchRow::new();
+        notif_row.set_title("Desktop notifications");
+        notif_row.set_subtitle(
+            "Notify on copy/move/delete completion and operation failures",
+        );
+        let initial_notif = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map(|a| a.notifications_enabled())
+            .unwrap_or(false);
+        notif_row.set_active(initial_notif);
+        notif_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_notifications_enabled(row.is_active());
+                }
+            }
+        ));
+        notif_group.add(&notif_row);
+        files_page.add(&notif_group);
+
         // Advanced group
         let advanced_group = adw::PreferencesGroup::new();
         advanced_group.set_title("Advanced");
@@ -3425,6 +3476,30 @@ impl WrenWindow {
         ));
     }
 
+    /// Send a desktop notification, gated on the "Notifications" preference
+    /// and the window NOT being focused. `id` should be one of:
+    ///   "wren-op-success"  — copy/move/delete completions
+    ///   "wren-op-error"    — operation failures
+    ///   "wren-load-error"  — directory load errors
+    /// The id deduplicates: a newer notification with the same id replaces
+    /// the previous one in the system tray.
+    pub fn maybe_send_notification(&self, id: &str, title: &str, body: &str) {
+        let app = match self.application().and_downcast::<WrenApplication>() {
+            Some(a) => a,
+            None => return,
+        };
+        if !app.notifications_enabled() {
+            return;
+        }
+        if self.is_active() {
+            return;
+        }
+        let notif = gio::Notification::new(title);
+        notif.set_body(Some(body));
+        notif.add_button("Show", "app.focus-window");
+        app.send_notification(Some(id), &notif);
+    }
+
     /// Per-file failure dialog used by batch rename. A toast can only
     /// say "N failed" — this dialog lists each (file, reason) so the
     /// user can act on the actual failures.
@@ -3505,28 +3580,28 @@ impl WrenWindow {
 
     pub fn op_finish(&self, handle: &OpHandle) {
         let imp = self.imp();
-        // System notification for long, successful ops so the user knows
-        // they can come back to the app — only worth it if the op fully
-        // completed (mark_succeeded was called), wasn't cancelled, and ran
-        // for at least 30 s of wall time. Errored ops would otherwise
-        // contradict their toast with a "Copy complete" notification.
-        let (elapsed, succeeded) = {
+        // Desktop notification for successful ops so the user knows they
+        // can come back to the app. Gated on the "Notifications" preference
+        // and on the window not being focused — see maybe_send_notification.
+        // Only fires when the op fully completed (mark_succeeded) and
+        // wasn't cancelled; errored ops would otherwise contradict their
+        // toast with a "Copy complete" notification.
+        let (items_done, succeeded) = {
             let s = handle.state.borrow();
-            (s.start.elapsed(), s.succeeded)
+            (s.items_done, s.succeeded)
         };
         let was_cancelled = handle.cancellable.is_cancelled();
-        if succeeded
-            && !was_cancelled
-            && elapsed >= std::time::Duration::from_secs(30)
-        {
-            if let Some(app) = self.application() {
-                let notif = gio::Notification::new(handle.kind.done_title());
-                notif.set_body(Some(&format!(
-                    "Finished in {}",
-                    format_duration(elapsed.as_secs())
-                )));
-                app.send_notification(Some("wren-op-done"), &notif);
-            }
+        if succeeded && !was_cancelled {
+            let body = match items_done {
+                0 => "Operation complete".to_string(),
+                1 => "1 item processed".to_string(),
+                n => format!("{n} items processed"),
+            };
+            self.maybe_send_notification(
+                "wren-op-success",
+                handle.kind.done_title(),
+                &body,
+            );
         }
 
         imp.op_popover_box.remove(&handle.row);
