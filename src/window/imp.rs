@@ -45,6 +45,13 @@ pub struct WrenWindow {
     pub breadcrumb_bar: TemplateChild<WrenBreadcrumbBar>,
     #[template_child]
     pub op_button: TemplateChild<gtk4::MenuButton>,
+    #[template_child]
+    pub banner: TemplateChild<adw::Banner>,
+
+    /// Active banner button-clicked handler — kept so we can disconnect a
+    /// previous one when `show_banner` is called again with a different
+    /// callback (or `None`).
+    pub banner_handler: RefCell<Option<glib::SignalHandlerId>>,
 
     pub tabs: RefCell<Vec<TabState>>,
     pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
@@ -85,6 +92,8 @@ impl Default for WrenWindow {
             view_button: Default::default(),
             breadcrumb_bar: Default::default(),
             op_button: Default::default(),
+            banner: Default::default(),
+            banner_handler: Default::default(),
             tabs: Default::default(),
             clipboard_files: Default::default(),
             show_hidden: Default::default(),
