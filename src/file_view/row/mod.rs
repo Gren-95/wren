@@ -456,3 +456,193 @@ fn format_size(bytes: u64) -> String {
         format!("{} B", bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{format_permissions, format_size, strip_extension_name, WrenFileRow};
+    use crate::model::FileObject;
+    use crate::test_helpers::run_on_gtk_thread;
+
+    fn make_file_object(name: &str, kind: gio::FileType, size: i64) -> FileObject {
+        let info = gio::FileInfo::new();
+        info.set_name(std::path::Path::new(name));
+        info.set_display_name(name);
+        info.set_file_type(kind);
+        info.set_size(size);
+        info.set_attribute_uint64("standard::size", size as u64);
+        info.set_content_type("text/plain");
+        info.set_icon(&gio::ThemedIcon::new("text-x-generic"));
+        info.set_is_hidden(name.starts_with('.'));
+        info.set_is_symlink(false);
+        let file = gio::File::for_path(format!("/tmp/wren-test/{name}"));
+        FileObject::new(file, info)
+    }
+
+    #[test]
+    fn row_bind_file_shows_size_and_type() {
+        run_on_gtk_thread(|| {
+            let row = WrenFileRow::new();
+            let fo = make_file_object("data.bin", gio::FileType::Regular, 2048);
+            row.bind(&fo, 24, true, false);
+            // Inspect template children directly via imp().
+            let imp = row.imp();
+            assert_eq!(imp.name.label().as_str(), "data.bin");
+            assert_eq!(imp.size.label().as_str(), "2 KB");
+            assert_eq!(imp.content_type.label().as_str(), "text/plain");
+        });
+    }
+
+    #[test]
+    fn row_bind_directory_shows_folder_label_and_pending_size_placeholder() {
+        run_on_gtk_thread(|| {
+            let row = WrenFileRow::new();
+            let fo = make_file_object("subdir", gio::FileType::Directory, 0);
+            row.bind(&fo, 24, true, false);
+            let imp = row.imp();
+            assert_eq!(imp.content_type.label().as_str(), "Folder");
+            // Directories show "…" while the async folder-count enumeration
+            // is in flight (or "—" when the policy disables counting). The
+            // test only synchronously observes the immediate placeholder.
+            let size = imp.size.label().to_string();
+            assert!(
+                matches!(size.as_str(), "…" | "—"),
+                "unexpected size placeholder: {size:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn row_bind_hides_extension_when_disabled() {
+        run_on_gtk_thread(|| {
+            let row = WrenFileRow::new();
+            let fo = make_file_object("photo.jpg", gio::FileType::Regular, 100);
+            row.bind(&fo, 24, false, false);
+            assert_eq!(row.imp().name.label().as_str(), "photo");
+        });
+    }
+
+    #[test]
+    fn row_unbind_clears_all_columns() {
+        run_on_gtk_thread(|| {
+            let row = WrenFileRow::new();
+            let fo = make_file_object("any.txt", gio::FileType::Regular, 50);
+            row.bind(&fo, 24, true, false);
+            row.unbind();
+            let imp = row.imp();
+            assert_eq!(imp.name.label().as_str(), "");
+            assert_eq!(imp.size.label().as_str(), "");
+            assert_eq!(imp.content_type.label().as_str(), "");
+            assert_eq!(imp.modified.label().as_str(), "");
+            assert!(row.bound_file_object().is_none());
+        });
+    }
+
+    #[test]
+    fn strip_extension_name_drops_simple_ext() {
+        assert_eq!(strip_extension_name("README.md"), "README");
+    }
+
+    #[test]
+    fn strip_extension_name_multi_dot_keeps_inner_extension() {
+        assert_eq!(strip_extension_name("archive.tar.gz"), "archive.tar");
+    }
+
+    #[test]
+    fn strip_extension_name_dotfile_intact() {
+        assert_eq!(strip_extension_name(".bashrc"), ".bashrc");
+    }
+
+    #[test]
+    fn strip_extension_name_apple_double_intact() {
+        assert_eq!(strip_extension_name("._foo"), "._foo");
+    }
+
+    #[test]
+    fn strip_extension_name_no_extension() {
+        assert_eq!(strip_extension_name("Makefile"), "Makefile");
+    }
+
+    #[test]
+    fn format_size_bytes_under_kilobyte() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1), "1 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_size_kilobytes() {
+        assert_eq!(format_size(1024), "1 KB");
+        // Rounded to 0 decimal places.
+        assert_eq!(format_size(1536), "2 KB");
+    }
+
+    #[test]
+    fn format_size_megabytes() {
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(1024 * 1024 * 5 / 2), "2.5 MB");
+    }
+
+    #[test]
+    fn format_size_gigabytes() {
+        assert_eq!(format_size(1024u64.pow(3)), "1.0 GB");
+        assert_eq!(format_size(1024u64.pow(3) * 3), "3.0 GB");
+    }
+
+    #[test]
+    fn format_size_threshold_boundary() {
+        // Just below KB cutoff stays in bytes.
+        assert_eq!(format_size(1023), "1023 B");
+        // At KB boundary switches units.
+        assert_eq!(format_size(1024), "1 KB");
+    }
+
+    // --- format_permissions ----------------------------------------
+
+    #[test]
+    fn format_permissions_typical_executable() {
+        // Standard rwxr-xr-x for an executable / directory.
+        assert_eq!(format_permissions(0o755), "rwxr-xr-x");
+    }
+
+    #[test]
+    fn format_permissions_typical_data_file() {
+        assert_eq!(format_permissions(0o644), "rw-r--r--");
+    }
+
+    #[test]
+    fn format_permissions_no_bits_set() {
+        // Pathological "no permissions at all" — every slot a dash.
+        assert_eq!(format_permissions(0o000), "---------");
+    }
+
+    #[test]
+    fn format_permissions_setuid_with_user_exec() {
+        // setuid + user exec → lowercase 's' in the user-exec slot.
+        assert_eq!(format_permissions(0o4755), "rwsr-xr-x");
+    }
+
+    #[test]
+    fn format_permissions_setuid_without_user_exec() {
+        // setuid WITHOUT user exec → uppercase 'S'.
+        assert_eq!(format_permissions(0o4644), "rwSr--r--");
+    }
+
+    #[test]
+    fn format_permissions_setgid_with_group_exec() {
+        // setgid + group exec → lowercase 's' in the group-exec slot.
+        assert_eq!(format_permissions(0o2755), "rwxr-sr-x");
+    }
+
+    #[test]
+    fn format_permissions_sticky_with_other_exec() {
+        // sticky + other exec → lowercase 't' in the other-exec slot.
+        assert_eq!(format_permissions(0o1755), "rwxr-xr-t");
+    }
+
+    #[test]
+    fn format_permissions_all_three_special_bits() {
+        // setuid + setgid + sticky, all with their respective execute
+        // bits set, render as the three lowercase letters.
+        assert_eq!(format_permissions(0o7755), "rwsr-sr-t");
+    }
+}

@@ -4858,3 +4858,45 @@ fn make_app_row(app: &gio::AppInfo) -> adw::ActionRow {
     row.set_activatable(true);
     row
 }
+
+#[cfg(test)]
+mod tests {
+    use super::template_label;
+
+    // show_extensions=true keeps the full filename including the suffix.
+    #[test]
+    fn template_label_keeps_full_name_when_extensions_visible() {
+        assert_eq!(template_label("foo.txt", true), "foo.txt");
+    }
+
+    #[test]
+    fn template_label_strips_simple_extension_when_off() {
+        assert_eq!(template_label("foo.txt", false), "foo");
+    }
+
+    // rfind('.') splits at the LAST dot, not the first — multi-part stems
+    // keep the inner extension visible.
+    #[test]
+    fn template_label_multi_dot_strips_only_last() {
+        assert_eq!(template_label("report.draft.docx", false), "report.draft");
+    }
+
+    // Dotfiles are preserved as-is regardless of the toggle.
+    #[test]
+    fn template_label_dotfile_intact() {
+        assert_eq!(template_label(".bashrc", false), ".bashrc");
+    }
+
+    // Edge case: single dot. Treated as a dotfile (starts with '.'),
+    // so it returns unchanged.
+    #[test]
+    fn template_label_lone_dot() {
+        assert_eq!(template_label(".", false), ".");
+    }
+
+    // Names without an extension fall through unchanged.
+    #[test]
+    fn template_label_no_extension() {
+        assert_eq!(template_label("noext", false), "noext");
+    }
+}

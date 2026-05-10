@@ -5,6 +5,8 @@ mod logging;
 mod model;
 mod navigation;
 mod sidebar;
+#[cfg(test)]
+mod test_helpers;
 mod window;
 
 use application::WrenApplication;
