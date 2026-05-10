@@ -514,7 +514,15 @@ impl WrenSidebar {
                         return false;
                     }
                 }
-                if mounted_names.contains(&v.name().to_string().to_lowercase()) {
+                let lower_name = v.name().to_string().to_lowercase();
+                if mounted_names.contains(&lower_name) {
+                    return false;
+                }
+                // Also skip volumes whose name matches a Network mount —
+                // GOA-backed cloud accounts surface as unmounted gio::Volume
+                // objects in addition to their google-drive:// mounts, and
+                // the user is already navigating the Network section's row.
+                if network_names.contains(&lower_name) {
                     return false;
                 }
                 true
