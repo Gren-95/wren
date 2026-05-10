@@ -84,7 +84,14 @@ impl WrenSidebar {
 
         // ── User bookmarks ───────────────────────────────────────────────────
 
-        let bookmarks = read_gtk_bookmarks();
+        let bookmarks_enabled = gio::Application::default()
+            .and_downcast::<crate::application::WrenApplication>()
+            .map_or(true, |a| a.bookmarks_enabled());
+        let bookmarks = if bookmarks_enabled {
+            read_gtk_bookmarks()
+        } else {
+            Vec::new()
+        };
         if !bookmarks.is_empty() {
             let header = Self::build_header_row("Bookmarks");
             list.append(&header);
@@ -196,6 +203,12 @@ impl WrenSidebar {
     fn append_bookmarks_section(&self) {
         let imp = self.imp();
         let list = &imp.list_box;
+        let bookmarks_enabled = gio::Application::default()
+            .and_downcast::<crate::application::WrenApplication>()
+            .map_or(true, |a| a.bookmarks_enabled());
+        if !bookmarks_enabled {
+            return;
+        }
         let bookmarks = read_gtk_bookmarks();
         if !bookmarks.is_empty() {
             list.append(&Self::build_header_row("Bookmarks"));

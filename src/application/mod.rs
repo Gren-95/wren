@@ -204,6 +204,43 @@ impl WrenApplication {
         self.imp().save_settings();
     }
 
+    pub fn show_duplicate(&self) -> bool { self.imp().show_duplicate.get() }
+    pub fn set_show_duplicate(&self, v: bool) {
+        self.imp().show_duplicate.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_create_link(&self) -> bool { self.imp().show_create_link.get() }
+    pub fn set_show_create_link(&self, v: bool) {
+        self.imp().show_create_link.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_add_bookmark(&self) -> bool { self.imp().show_add_bookmark.get() }
+    pub fn set_show_add_bookmark(&self, v: bool) {
+        self.imp().show_add_bookmark.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn show_copy_location(&self) -> bool { self.imp().show_copy_location.get() }
+    pub fn set_show_copy_location(&self, v: bool) {
+        self.imp().show_copy_location.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn bookmarks_enabled(&self) -> bool { self.imp().bookmarks_enabled.get() }
+    pub fn set_bookmarks_enabled(&self, v: bool) {
+        self.imp().bookmarks_enabled.set(v);
+        self.imp().save_settings();
+    }
+
+    pub fn folders_first(&self) -> bool { self.imp().folders_first.get() }
+    pub fn set_folders_first(&self, v: bool) {
+        self.imp().folders_first.set(v);
+        crate::model::directory_model::set_folders_first(v);
+        self.imp().save_settings();
+    }
+
     /// Push `uri` to the front of the recents list (MRU), deduplicating any
     /// prior occurrence and capping at `RECENTS_MAX`. Returns true when the
     /// list changed (caller may want to refresh the sidebar).

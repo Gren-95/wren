@@ -30,6 +30,12 @@ pub struct WrenApplication {
     pub recents_enabled: Cell<bool>,
     pub recents_cap: Cell<usize>,
     pub thumbnail_cache_size: Cell<usize>,
+    pub show_duplicate: Cell<bool>,
+    pub show_create_link: Cell<bool>,
+    pub show_add_bookmark: Cell<bool>,
+    pub show_copy_location: Cell<bool>,
+    pub bookmarks_enabled: Cell<bool>,
+    pub folders_first: Cell<bool>,
 }
 
 impl Default for WrenApplication {
@@ -56,6 +62,12 @@ impl Default for WrenApplication {
             recents_enabled: Cell::new(false),
             recents_cap: Cell::new(super::RECENTS_DEFAULT),
             thumbnail_cache_size: Cell::new(super::THUMB_CACHE_DEFAULT),
+            show_duplicate: Cell::new(true),
+            show_create_link: Cell::new(true),
+            show_add_bookmark: Cell::new(true),
+            show_copy_location: Cell::new(true),
+            bookmarks_enabled: Cell::new(true),
+            folders_first: Cell::new(true),
         }
     }
 }
@@ -178,6 +190,24 @@ impl WrenApplication {
                 let clamped = (v as usize).clamp(super::THUMB_CACHE_MIN, super::THUMB_CACHE_MAX);
                 self.thumbnail_cache_size.set(clamped);
             }
+            if let Ok(v) = kf.boolean("ContextMenu", "show_duplicate") {
+                self.show_duplicate.set(v);
+            }
+            if let Ok(v) = kf.boolean("ContextMenu", "show_create_link") {
+                self.show_create_link.set(v);
+            }
+            if let Ok(v) = kf.boolean("ContextMenu", "show_add_bookmark") {
+                self.show_add_bookmark.set(v);
+            }
+            if let Ok(v) = kf.boolean("ContextMenu", "show_copy_location") {
+                self.show_copy_location.set(v);
+            }
+            if let Ok(v) = kf.boolean("Sidebar", "bookmarks_enabled") {
+                self.bookmarks_enabled.set(v);
+            }
+            if let Ok(v) = kf.boolean("Sort", "folders_first") {
+                self.folders_first.set(v);
+            }
             // Same \t-joined storage rationale as last_tabs above.
             if let Ok(joined) = kf.string("Recents", "uris") {
                 let s = joined.to_string();
@@ -232,6 +262,12 @@ impl WrenApplication {
             "thumbnail_cache_size",
             self.thumbnail_cache_size.get() as i32,
         );
+        kf.set_boolean("ContextMenu", "show_duplicate", self.show_duplicate.get());
+        kf.set_boolean("ContextMenu", "show_create_link", self.show_create_link.get());
+        kf.set_boolean("ContextMenu", "show_add_bookmark", self.show_add_bookmark.get());
+        kf.set_boolean("ContextMenu", "show_copy_location", self.show_copy_location.get());
+        kf.set_boolean("Sidebar", "bookmarks_enabled", self.bookmarks_enabled.get());
+        kf.set_boolean("Sort", "folders_first", self.folders_first.get());
         let data = kf.to_data();
         let _ = std::fs::write(&path, data.as_str());
     }
@@ -290,6 +326,7 @@ impl ApplicationImpl for WrenApplication {
         self.load_settings();
         crate::logging::set_enabled(self.debug_logging.get());
         crate::file_view::cell::set_thumbnail_cache_cap(self.thumbnail_cache_size.get());
+        crate::model::directory_model::set_folders_first(self.folders_first.get());
         let app = self.obj();
 
         let scheme = match self.color_scheme.borrow().as_str() {

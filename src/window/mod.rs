@@ -654,6 +654,19 @@ impl WrenWindow {
         }
     }
 
+    /// Re-run the sort on every tab's directory model. Used when a global
+    /// sort preference (e.g. folders-first) changes — the comparator picks
+    /// up the new value automatically; we just need to invalidate cached
+    /// orderings.
+    pub fn refresh_all_sorts(&self) {
+        let tabs = self.imp().tabs.borrow();
+        for tab in tabs.iter() {
+            if let Some(model) = tab.dir_model.as_ref() {
+                model.refresh_sort();
+            }
+        }
+    }
+
     // ── Zoom ─────────────────────────────────────────────────────────────────
 
     pub fn zoom_in(&self) {
@@ -898,34 +911,50 @@ impl WrenWindow {
 
         let file_section = gio::Menu::new();
         file_section.append(Some("New Folder"), Some("win.new-folder"));
-        // Append one item per ~/Templates entry, using a parameterised
-        // action so a single handler can dispatch on basename. The list
-        // is rebuilt on every right-click (see setup_context_menu) so
+        // Wrap ~/Templates entries in a submenu so a populated Templates
+        // dir doesn't blow up the file_section's vertical extent. List
+        // is rebuilt every right-click (see setup_context_menu) so
         // adding/removing templates while wren is open Just Works.
         let templates = templates::list_templates();
-        for (name, _path) in &templates {
-            let item = gio::MenuItem::new(
-                Some(&format!("New {name}")),
-                None,
-            );
-            item.set_action_and_target_value(
-                Some("win.new-from-template"),
-                Some(&name.to_variant()),
-            );
-            file_section.append_item(&item);
+        if !templates.is_empty() {
+            let templates_menu = gio::Menu::new();
+            for (name, _path) in &templates {
+                let label = std::path::Path::new(name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(name);
+                let item = gio::MenuItem::new(Some(label), None);
+                item.set_action_and_target_value(
+                    Some("win.new-from-template"),
+                    Some(&name.to_variant()),
+                );
+                templates_menu.append_item(&item);
+            }
+            file_section.append_submenu(Some("New Document"), &templates_menu);
         }
-        file_section.append(Some("Duplicate"), Some("win.duplicate"));
+        let app = self.application().and_downcast::<WrenApplication>();
+        if app.as_ref().map_or(true, |a| a.show_duplicate()) {
+            file_section.append(Some("Duplicate"), Some("win.duplicate"));
+        }
         file_section.append(Some("Rename"), Some("win.rename"));
-        file_section.append(Some("Create Link"), Some("win.create-link"));
-        file_section.append(Some("Add to Bookmarks"), Some("win.add-bookmark"));
-        file_section.append(Some("Copy Location"), Some("win.copy-path"));
+        if app.as_ref().map_or(true, |a| a.show_create_link()) {
+            file_section.append(Some("Create Link"), Some("win.create-link"));
+        }
+        if app.as_ref().map_or(true, |a| a.show_add_bookmark()) {
+            file_section.append(Some("Add to Bookmarks"), Some("win.add-bookmark"));
+        }
+        if app.as_ref().map_or(true, |a| a.show_copy_location()) {
+            file_section.append(Some("Copy Location"), Some("win.copy-path"));
+        }
         file_section.append(Some("Move to Trash"), Some("win.move-to-trash"));
         menu.append_section(None, &file_section);
 
-        let trash_section = gio::Menu::new();
-        trash_section.append(Some("Restore From Trash"), Some("win.restore-from-trash"));
-        trash_section.append(Some("Empty Trash"), Some("win.empty-trash"));
-        menu.append_section(None, &trash_section);
+        if self.current_location_is_trash() {
+            let trash_section = gio::Menu::new();
+            trash_section.append(Some("Restore From Trash"), Some("win.restore-from-trash"));
+            trash_section.append(Some("Empty Trash"), Some("win.empty-trash"));
+            menu.append_section(None, &trash_section);
+        }
 
         let info_section = gio::Menu::new();
         info_section.append(Some("Properties"), Some("win.properties"));
@@ -1890,6 +1919,109 @@ impl WrenWindow {
         performance_group.add(&thumb_cache_row);
         page.add(&performance_group);
 
+        // Context menu group
+        let context_group = adw::PreferencesGroup::new();
+        context_group.set_title("Context Menu");
+        context_group.set_description(Some("Hide actions you don't use"));
+
+        let duplicate_row = adw::SwitchRow::new();
+        duplicate_row.set_title("Duplicate");
+        let initial_dup = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.show_duplicate());
+        duplicate_row.set_active(initial_dup);
+        duplicate_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_show_duplicate(row.is_active());
+                }
+            }
+        ));
+        context_group.add(&duplicate_row);
+
+        let create_link_row = adw::SwitchRow::new();
+        create_link_row.set_title("Create Link");
+        let initial_link = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.show_create_link());
+        create_link_row.set_active(initial_link);
+        create_link_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_show_create_link(row.is_active());
+                }
+            }
+        ));
+        context_group.add(&create_link_row);
+
+        let bookmark_row = adw::SwitchRow::new();
+        bookmark_row.set_title("Add to Bookmarks");
+        let initial_bm = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.show_add_bookmark());
+        bookmark_row.set_active(initial_bm);
+        bookmark_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_show_add_bookmark(row.is_active());
+                }
+            }
+        ));
+        context_group.add(&bookmark_row);
+
+        let copy_loc_row = adw::SwitchRow::new();
+        copy_loc_row.set_title("Copy Location");
+        let initial_cl = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.show_copy_location());
+        copy_loc_row.set_active(initial_cl);
+        copy_loc_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_show_copy_location(row.is_active());
+                }
+            }
+        ));
+        context_group.add(&copy_loc_row);
+        page.add(&context_group);
+
+        // Sorting group
+        let sorting_group = adw::PreferencesGroup::new();
+        sorting_group.set_title("Sorting");
+
+        let folders_first_row = adw::SwitchRow::new();
+        folders_first_row.set_title("Folders before files");
+        folders_first_row.set_subtitle("Group directories at the top regardless of sort order");
+        let initial_ff = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.folders_first());
+        folders_first_row.set_active(initial_ff);
+        folders_first_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_folders_first(row.is_active());
+                }
+                window.refresh_all_sorts();
+            }
+        ));
+        sorting_group.add(&folders_first_row);
+        page.add(&sorting_group);
+
         // Sidebar group
         let sidebar_group = adw::PreferencesGroup::new();
         sidebar_group.set_title("Sidebar");
@@ -1943,6 +2075,26 @@ impl WrenWindow {
         ));
         sidebar_group.add(&recents_row);
         sidebar_group.add(&recents_max_row);
+
+        let bookmarks_row = adw::SwitchRow::new();
+        bookmarks_row.set_title("Bookmarks");
+        bookmarks_row.set_subtitle("Show the Bookmarks section in the sidebar");
+        let initial_bookmarks = self
+            .application()
+            .and_downcast::<WrenApplication>()
+            .map_or(true, |a| a.bookmarks_enabled());
+        bookmarks_row.set_active(initial_bookmarks);
+        bookmarks_row.connect_active_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
+                    app.set_bookmarks_enabled(row.is_active());
+                }
+                window.imp().sidebar.reload_bookmarks();
+            }
+        ));
+        sidebar_group.add(&bookmarks_row);
         page.add(&sidebar_group);
 
         // Advanced group

@@ -406,6 +406,7 @@ impl WrenFileGrid {
             1,
         )));
         popover.popup();
+        crate::file_view::popover::lock_vertical_only(&popover);
         imp.context_popover.replace(Some(popover));
     }
 

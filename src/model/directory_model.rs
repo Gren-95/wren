@@ -1,8 +1,21 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use gtk4::prelude::*;
 
 use crate::model::FileObject;
+
+thread_local! {
+    static FOLDERS_FIRST: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Update the global "directories before files" preference. The setting is
+/// thread-local so the sort comparator (which fires on the main thread) can
+/// read it without going through the app singleton each comparison. Caller
+/// must invalidate any existing sorters separately — this only updates the
+/// flag.
+pub fn set_folders_first(v: bool) {
+    FOLDERS_FIRST.with(|c| c.set(v));
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortKey {
@@ -87,11 +100,15 @@ impl DirectoryModel {
             move |a, b| {
                 let a = a.downcast_ref::<FileObject>().unwrap();
                 let b = b.downcast_ref::<FileObject>().unwrap();
-                // Directories always first regardless of sort key
-                match (a.is_directory(), b.is_directory()) {
-                    (true, false) => return gtk4::Ordering::Smaller,
-                    (false, true) => return gtk4::Ordering::Larger,
-                    _ => {}
+                // Directories first only when the user-configurable
+                // preference is on (default). Off → fall through to the
+                // selected sort key, mixing dirs and files.
+                if FOLDERS_FIRST.with(|c| c.get()) {
+                    match (a.is_directory(), b.is_directory()) {
+                        (true, false) => return gtk4::Ordering::Smaller,
+                        (false, true) => return gtk4::Ordering::Larger,
+                        _ => {}
+                    }
                 }
                 let state = sort_state.borrow();
                 let ord = match state.key {
@@ -135,6 +152,12 @@ impl DirectoryModel {
             state.show_hidden = show_hidden;
         }
         self.filter.changed(gtk4::FilterChange::Different);
+    }
+
+    /// Force a re-sort using the current `SortState` and the current
+    /// thread-local `FOLDERS_FIRST` flag. Call after toggling that flag.
+    pub fn refresh_sort(&self) {
+        self.sorter.changed(gtk4::SorterChange::Different);
     }
 
     pub fn set_sort(&self, key: SortKey, reversed: bool) {
