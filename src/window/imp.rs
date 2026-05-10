@@ -30,6 +30,8 @@ pub struct WrenWindow {
     #[template_child]
     pub search_button: TemplateChild<gtk4::ToggleButton>,
     #[template_child]
+    pub search_banner: TemplateChild<adw::Banner>,
+    #[template_child]
     pub tab_bar: TemplateChild<adw::TabBar>,
     #[template_child]
     pub tab_view: TemplateChild<adw::TabView>,
@@ -54,6 +56,11 @@ pub struct WrenWindow {
     pub banner_handler: RefCell<Option<glib::SignalHandlerId>>,
 
     pub tabs: RefCell<Vec<TabState>>,
+    /// True when the current tab is in recursive-search mode (i.e. its
+    /// dir_model.store contains search results, not the dir's children).
+    /// Used to avoid spurious browse-mode reloads when the search bar
+    /// gets toggled by tab switches or navigation.
+    pub searching: Cell<bool>,
     pub clipboard_files: RefCell<Option<(Vec<gio::File>, bool)>>,
     pub show_hidden: Cell<bool>,
     pub show_extensions: Cell<bool>,
@@ -92,6 +99,7 @@ impl Default for WrenWindow {
             search_bar: Default::default(),
             search_entry: Default::default(),
             search_button: Default::default(),
+            search_banner: Default::default(),
             tab_bar: Default::default(),
             tab_view: Default::default(),
             sidebar: Default::default(),
@@ -103,6 +111,7 @@ impl Default for WrenWindow {
             banner: Default::default(),
             banner_handler: Default::default(),
             tabs: Default::default(),
+            searching: Default::default(),
             clipboard_files: Default::default(),
             show_hidden: Default::default(),
             show_extensions: Cell::new(true),
@@ -147,6 +156,10 @@ impl ObjectSubclass for WrenWindow {
         klass.install_action("win.toggle-search", None, |win, action_name, _| {
             crate::wren_log!("action: {action_name}");
             win.toggle_search();
+        });
+        klass.install_action("win.cancel-search", None, |win, action_name, _| {
+            crate::wren_log!("action: {action_name}");
+            win.cancel_search();
         });
         klass.install_action("win.new-tab", None, |win, action_name, _| {
             crate::wren_log!("action: {action_name}");

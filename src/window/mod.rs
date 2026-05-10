@@ -320,11 +320,18 @@ impl WrenWindow {
         self.update_selection_actions();
         self.update_list_sort_headers();
 
-        // Close search and reset the new tab's filter
+        // Close search and reset the new tab's filter. The previous
+        // tab's recursive search (if any) is left running on its model
+        // — switching back will see its results; switching to a
+        // different dir will cancel it via load_location_for_tab.
+        // Clear `searching` first so the bar's notify doesn't re-enter
+        // exit_search_mode and reload the tab we just switched to.
         {
             let imp = self.imp();
+            imp.searching.set(false);
             imp.search_bar.set_search_mode(false);
             imp.search_entry.set_text("");
+            self.hide_banner();
         }
         {
             let imp = self.imp();
@@ -501,6 +508,21 @@ impl WrenWindow {
         imp.breadcrumb_bar.set_location(&location);
         imp.sidebar.set_location(&location);
 
+        // Search resets on directory change (Nautilus-style). Closing
+        // the bar here is what makes typing in /a/, navigating to /b/,
+        // and continuing to type land you searching /b/ — not /a/.
+        // Clear `searching` first so the search-bar notify handler
+        // doesn't recursively call us again.
+        imp.searching.set(false);
+        let was_searching = imp.search_bar.is_search_mode()
+            || !imp.search_entry.text().is_empty();
+        if was_searching && Some(tab_idx) == self.current_tab_index() {
+            imp.search_bar.set_search_mode(false);
+            imp.search_button.set_active(false);
+            imp.search_entry.set_text("");
+            self.hide_banner();
+        }
+
         {
             let tabs = imp.tabs.borrow();
             if let Some(tab) = tabs.get(tab_idx) {
@@ -509,9 +531,8 @@ impl WrenWindow {
         }
 
         let dir_model = DirectoryModel::new(location.clone());
-        let search_text = imp.search_entry.text().to_lowercase();
         let show_hidden = imp.show_hidden.get();
-        dir_model.set_filter(&search_text, show_hidden);
+        dir_model.set_filter("", show_hidden);
 
         // Reset the mime filter to All on every navigation (per-tab, in
         // memory only — same lifecycle as the search text).
@@ -633,10 +654,13 @@ impl WrenWindow {
                         if !is_current {
                             return;
                         }
-                        let search_text = window.imp().search_entry.text();
+                        // Browse mode: search is reset on navigation,
+                        // so the only filter that hides items here is
+                        // show-hidden. "no-results" therefore only fires
+                        // when every entry is a dotfile.
                         if store.n_items() == 0 {
                             content_stack.set_visible_child_name("empty");
-                        } else if filter_model.n_items() == 0 && !search_text.is_empty() {
+                        } else if filter_model.n_items() == 0 {
                             content_stack.set_visible_child_name("no-results");
                         } else {
                             content_stack.set_visible_child_name("files");
@@ -991,6 +1015,60 @@ impl WrenWindow {
         if active {
             imp.search_entry.grab_focus();
         }
+        // The search-mode-enabled notify handler in setup_search calls
+        // exit_search_mode on close — no need to do it here too.
+    }
+
+    /// Banner button handler: cancel any in-flight search and close the
+    /// search bar. Restores the current directory's normal listing.
+    /// (`exit_search_mode` runs from the search-bar notify handler.)
+    pub fn cancel_search(&self) {
+        let imp = self.imp();
+        imp.search_entry.set_text("");
+        imp.search_bar.set_search_mode(false);
+        imp.search_button.set_active(false);
+    }
+
+    /// Cancels the in-flight search future (if any) and reloads the
+    /// current tab's directory in browse mode. Used when the user
+    /// closes the search bar or clears the query. No-op when not
+    /// currently in search mode — avoids redundant reloads on tab
+    /// switches and navigation, which already toggle the bar off.
+    fn exit_search_mode(&self) {
+        let imp = self.imp();
+        self.hide_search_banner();
+        if !imp.searching.get() {
+            return;
+        }
+        imp.searching.set(false);
+        let Some(idx) = self.current_tab_index() else { return };
+        let location = {
+            let tabs = imp.tabs.borrow();
+            tabs.get(idx).and_then(|t| t.navigation.current().cloned())
+        };
+        if let Some(loc) = location {
+            self.load_location_for_tab(idx, loc);
+        }
+    }
+
+    /// Reveal the in-window banner. `button_label` adds an action
+    /// button bound to `win.<action_name>`; pass None for an info-only
+    /// banner.
+    pub fn show_search_banner(&self, text: &str, button_label: Option<&str>, action_name: Option<&str>) {
+        let banner = &self.imp().search_banner;
+        banner.set_title(text);
+        if let (Some(label), Some(name)) = (button_label, action_name) {
+            banner.set_button_label(Some(label));
+            banner.set_action_name(Some(&format!("win.{name}")));
+        } else {
+            banner.set_button_label(None);
+            banner.set_action_name(None);
+        }
+        banner.set_revealed(true);
+    }
+
+    pub fn hide_search_banner(&self) {
+        self.imp().search_banner.set_revealed(false);
     }
 
     /// Push the current search entry text onto the session MRU. Empty
@@ -1056,8 +1134,16 @@ impl WrenWindow {
             .connect_search_mode_enabled_notify(glib::clone!(
                 #[weak(rename_to = button)]
                 imp.search_button,
+                #[weak(rename_to = window)]
+                self,
                 move |bar| {
                     button.set_active(bar.is_search_mode());
+                    if !bar.is_search_mode() {
+                        // The user dismissed the bar via Escape (no
+                        // toggle_search call); make sure search state
+                        // is fully cleared.
+                        window.exit_search_mode();
+                    }
                 }
             ));
 
@@ -1065,24 +1151,109 @@ impl WrenWindow {
             #[weak(rename_to = window)]
             self,
             move |entry| {
-                let text = entry.text().to_lowercase();
-                let show_hidden = window.imp().show_hidden.get();
-                let Some(idx) = window.current_tab_index() else {
-                    return;
+                window.run_search(&entry.text());
+            }
+        ));
+    }
+
+    /// Drives the recursive search for the current tab.
+    ///
+    /// Empty query → restore the directory's normal browse-mode load.
+    /// Non-empty query → kick off `DirectoryModel::start_search`,
+    /// cancelling any prior in-flight walk. The "Searching subfolders…"
+    /// banner is shown while the future runs and is hidden on
+    /// completion or cancellation.
+    fn run_search(&self, query: &str) {
+        let imp = self.imp();
+        let Some(idx) = self.current_tab_index() else { return };
+        let show_hidden = imp.show_hidden.get();
+        let trimmed = query.trim().to_string();
+
+        // Capture the data we need; drop the borrow before awaiting.
+        let (fut, content_stack, status_bar, load_gen);
+        {
+            let tabs = imp.tabs.borrow();
+            let Some(tab) = tabs.get(idx) else { return };
+            let Some(m) = tab.dir_model.as_ref() else { return };
+            content_stack = tab.content_stack.clone();
+            status_bar = tab.status_bar.clone();
+            // Use the same load_gen counter that browse-mode loads use,
+            // so a navigation kicked off mid-search wins (its bump
+            // invalidates this future when it returns).
+            let next = tab.load_gen.get() + 1;
+            tab.load_gen.set(next);
+            load_gen = next;
+
+            if trimmed.is_empty() {
+                self.hide_search_banner();
+                imp.searching.set(false);
+                content_stack.set_visible_child_name("files");
+                status_bar.set_text("");
+                let load_fut = m.start_load();
+                drop(tabs);
+                glib::spawn_future_local(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    async move {
+                        let _ = load_fut.await;
+                        let is_current = {
+                            let tabs = window.imp().tabs.borrow();
+                            tabs.get(idx).map_or(false, |t| t.load_gen.get() == load_gen)
+                        };
+                        if !is_current { return; }
+                        window.update_status_bar();
+                    }
+                ));
+                return;
+            }
+
+            fut = m.start_search(&trimmed, show_hidden);
+        }
+
+        imp.searching.set(true);
+        self.show_search_banner("Searching subfolders…", Some("Cancel"), Some("cancel-search"));
+        content_stack.set_visible_child_name("files");
+        status_bar.set_text("");
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                let result = fut.await;
+                let is_current = {
+                    let tabs = window.imp().tabs.borrow();
+                    tabs.get(idx).map_or(false, |t| t.load_gen.get() == load_gen)
                 };
-                let tabs = window.imp().tabs.borrow();
-                if let Some(tab) = tabs.get(idx) {
-                    if let Some(model) = tab.dir_model.as_ref() {
-                        model.set_filter(&text, show_hidden);
-                        if model.store.n_items() > 0 {
-                            if model.filter_model.n_items() == 0 && !text.is_empty() {
-                                tab.content_stack.set_visible_child_name("no-results");
-                            } else {
-                                tab.content_stack.set_visible_child_name("files");
-                            }
-                        }
+                // Cancellation safety: a stale future (superseded by
+                // a newer keystroke or by navigation) must not paint
+                // banner/status state for results that no longer
+                // belong to the visible tab.
+                if !is_current { return; }
+                match result {
+                    Ok(true) => window.show_search_banner(
+                        "Search truncated — too many results",
+                        None,
+                        None,
+                    ),
+                    Ok(false) => window.hide_search_banner(),
+                    Err(_) => window.hide_search_banner(),
+                }
+                // Empty result set in search mode → reuse the
+                // existing "no-results" status page, same as the
+                // pre-recursive single-dir search behaviour.
+                let n = {
+                    let tabs = window.imp().tabs.borrow();
+                    tabs.get(idx)
+                        .and_then(|t| t.dir_model.as_ref().map(|m| m.filter_model.n_items()))
+                        .unwrap_or(0)
+                };
+                if let Some(tab) = window.imp().tabs.borrow().get(idx) {
+                    if n == 0 {
+                        tab.content_stack.set_visible_child_name("no-results");
+                    } else {
+                        tab.content_stack.set_visible_child_name("files");
                     }
                 }
+                window.update_status_bar();
             }
         ));
 
@@ -1146,21 +1317,23 @@ impl WrenWindow {
         // Folder counts include/exclude hidden children based on the same flag,
         // so any cached counts are now stale.
         crate::file_view::row::clear_folder_count_cache();
+        let search_active = imp.search_bar.is_search_mode()
+            && !imp.search_entry.text().is_empty();
         let tabs = imp.tabs.borrow();
         for (i, tab) in tabs.iter().enumerate() {
             tab.file_list.set_show_hidden(show_hidden);
             let Some(model) = tab.dir_model.as_ref() else { continue };
-            // Background tabs have no live search; only the current tab's
-            // search_entry text matters for content_stack state.
-            let text = if Some(i) == current_idx {
-                imp.search_entry.text().to_lowercase()
-            } else {
-                String::new()
-            };
-            model.set_filter(&text, show_hidden);
+            model.set_filter("", show_hidden);
+            // Re-trigger search on the current tab so a freshly-toggled
+            // show-hidden setting is reflected in recursive results.
+            if Some(i) == current_idx && search_active {
+                drop(tabs);
+                self.run_search(&imp.search_entry.text());
+                return;
+            }
             if model.store.n_items() == 0 {
                 tab.content_stack.set_visible_child_name("empty");
-            } else if model.filter_model.n_items() == 0 && !text.is_empty() {
+            } else if model.filter_model.n_items() == 0 {
                 tab.content_stack.set_visible_child_name("no-results");
             } else {
                 tab.content_stack.set_visible_child_name("files");

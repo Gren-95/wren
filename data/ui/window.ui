@@ -129,6 +129,12 @@
                       </object>
                     </child>
                     <child>
+                      <object class="AdwBanner" id="search_banner">
+                        <property name="revealed">false</property>
+                        <property name="title"></property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="AdwTabView" id="tab_view">
                         <property name="vexpand">true</property>
                       </object>
