@@ -2,15 +2,15 @@
 //!
 //! Three pages:
 //!   * General     — large icon + editable name, type, size (recursive for
-//!                   directories), location (clickable), modified / accessed /
-//!                   created timestamps, free space on the filesystem.
+//!     directories), location (clickable), modified / accessed /
+//!     created timestamps, free space on the filesystem.
 //!   * Permissions — owner / group display, three sets of r/w/x checkboxes
-//!                   (owner / group / others), executable shortcut for files,
-//!                   SELinux context if available. Read-only when the current
-//!                   user is not the owner. Hidden entirely when `unix::mode`
-//!                   is unavailable (non-local backends).
+//!     (owner / group / others), executable shortcut for files,
+//!     SELinux context if available. Read-only when the current
+//!     user is not the owner. Hidden entirely when `unix::mode`
+//!     is unavailable (non-local backends).
 //!   * Open With   — registered AppInfo handlers for the file's content type;
-//!                   click to set as default.
+//!     click to set as default.
 //!
 //! Async work spawned by the dialog (recursive size, free space, extended
 //! FileInfo query) is gated by a `gio::Cancellable` that is cancelled when
@@ -616,7 +616,7 @@ fn populate_perms_page(
     let mode = info.attribute_uint32("unix::mode");
     let owner_uid = info.attribute_uint32("unix::uid");
     let current_uid = current_user_uid();
-    let editable = current_uid.map_or(false, |u| u == owner_uid);
+    let editable = current_uid == Some(owner_uid);
 
     let mode_state = Rc::new(Cell::new(mode));
 

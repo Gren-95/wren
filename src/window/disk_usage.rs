@@ -86,11 +86,10 @@ fn resolve_mount(file: &gio::File) -> Option<gio::Mount> {
 }
 
 fn cache_key_for(file: &gio::File, mount: Option<&gio::Mount>) -> Option<CacheKey> {
-    if let Some(m) = mount {
-        if let Some(p) = m.root().path() {
+    if let Some(m) = mount
+        && let Some(p) = m.root().path() {
             return Some(CacheKey::Mount(p));
         }
-    }
     file.path().map(CacheKey::Dir)
 }
 

@@ -59,12 +59,12 @@ pub fn unique_dest(dest_dir: &gio::File, name: &std::path::Path) -> Option<gio::
         .and_then(|s| s.to_str())
         .map(|e| format!(".{}", e))
         .unwrap_or_default();
-    let candidate = dest_dir.child(&format!("{} (Copy){}", stem, ext));
+    let candidate = dest_dir.child(format!("{} (Copy){}", stem, ext));
     if !candidate.query_exists(gio::Cancellable::NONE) {
         return Some(candidate);
     }
     for i in 2u32..=1000 {
-        let c = dest_dir.child(&format!("{} (Copy {}){}", stem, i, ext));
+        let c = dest_dir.child(format!("{} (Copy {}){}", stem, i, ext));
         if !c.query_exists(gio::Cancellable::NONE) {
             return Some(c);
         }

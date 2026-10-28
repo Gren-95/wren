@@ -29,7 +29,7 @@ impl WrenWindow {
         let confirm = self
             .application()
             .and_downcast::<crate::application::WrenApplication>()
-            .map_or(true, |a| a.confirm_move_to_trash());
+            .is_none_or(|a| a.confirm_move_to_trash());
         if !confirm {
             glib::spawn_future_local(glib::clone!(
                 #[weak(rename_to = window)] self,
@@ -268,19 +268,16 @@ impl WrenWindow {
                         // Recreate missing parent directories so files
                         // restored after their containing folder was
                         // removed land back at the original path.
-                        if let Some(parent) = dest.parent() {
-                            if !parent.query_exists(Cancellable::NONE) {
-                                if let Err(e) = parent.make_directory_with_parents(Cancellable::NONE) {
-                                    if !e.matches(gio::IOErrorEnum::Exists) {
+                        if let Some(parent) = dest.parent()
+                            && !parent.query_exists(Cancellable::NONE)
+                                && let Err(e) = parent.make_directory_with_parents(Cancellable::NONE)
+                                    && !e.matches(gio::IOErrorEnum::Exists) {
                                         log_err("restore (mkdir)", file, Some(&dest), &e);
                                         window.show_toast(&format!(
                                             "Could not restore {name}: {e}"
                                         ));
                                         continue;
                                     }
-                                }
-                            }
-                        }
 
                         let (fut, _progress) = file.move_future(
                             &dest,
@@ -557,7 +554,7 @@ impl WrenWindow {
                 if !wanted.contains(&orig_path) {
                     continue;
                 }
-                let entry = trash.child(&info.name());
+                let entry = trash.child(info.name());
                 let dest = gio::File::for_path(&orig_path);
                 to_restore.push((entry, dest));
             }
@@ -567,17 +564,14 @@ impl WrenWindow {
             log_op("undo trash (restore)", entry, Some(dest));
             // Recreate missing parent directories — same as the
             // explicit Restore path.
-            if let Some(parent) = dest.parent() {
-                if !parent.query_exists(gio::Cancellable::NONE) {
-                    if let Err(e) = parent.make_directory_with_parents(gio::Cancellable::NONE) {
-                        if !e.matches(gio::IOErrorEnum::Exists) {
+            if let Some(parent) = dest.parent()
+                && !parent.query_exists(gio::Cancellable::NONE)
+                    && let Err(e) = parent.make_directory_with_parents(gio::Cancellable::NONE)
+                        && !e.matches(gio::IOErrorEnum::Exists) {
                             log_err("undo trash (mkdir)", entry, Some(dest), &e);
                             self.show_toast(&format!("Could not undo: {e}"));
                             continue;
                         }
-                    }
-                }
-            }
             let (fut, _progress) = entry.move_future(
                 dest,
                 gio::FileCopyFlags::NOFOLLOW_SYMLINKS,

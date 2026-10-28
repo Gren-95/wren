@@ -211,8 +211,8 @@ impl WrenWindow {
 
     pub fn new_tab(&self) {
         let app = self.application().and_downcast::<WrenApplication>();
-        if let Some(app) = app.as_ref() {
-            if app.new_tab_use_defaults() {
+        if let Some(app) = app.as_ref()
+            && app.new_tab_use_defaults() {
                 let path = app.new_tab_default_path();
                 let location = if path.is_empty() {
                     gio::File::for_path(glib::home_dir())
@@ -233,7 +233,6 @@ impl WrenWindow {
                 self.add_tab_with_state(location, Some(&pref));
                 return;
             }
-        }
         self.add_tab(gio::File::for_path(glib::home_dir()));
     }
 
@@ -281,11 +280,10 @@ impl WrenWindow {
         }
         self.set_title(Some(&window_title));
         // Sync view-mode action state
-        if let Some(a) = self.lookup_action("set-view-mode") {
-            if let Ok(a) = a.downcast::<gio::SimpleAction>() {
+        if let Some(a) = self.lookup_action("set-view-mode")
+            && let Ok(a) = a.downcast::<gio::SimpleAction>() {
                 a.set_state(&mode.to_variant());
             }
-        }
         let icon = if mode == "list" {
             "view-list-symbolic"
         } else {
@@ -294,23 +292,20 @@ impl WrenWindow {
         self.imp().view_button.set_icon_name(icon);
 
         // Sync sort action states
-        if let Some(a) = self.lookup_action("set-sort-key") {
-            if let Ok(a) = a.downcast::<gio::SimpleAction>() {
+        if let Some(a) = self.lookup_action("set-sort-key")
+            && let Ok(a) = a.downcast::<gio::SimpleAction>() {
                 a.set_state(&sort_key.as_str().to_variant());
             }
-        }
-        if let Some(a) = self.lookup_action("toggle-sort-reversed") {
-            if let Ok(a) = a.downcast::<gio::SimpleAction>() {
+        if let Some(a) = self.lookup_action("toggle-sort-reversed")
+            && let Ok(a) = a.downcast::<gio::SimpleAction>() {
                 a.set_state(&sort_reversed.to_variant());
             }
-        }
 
         // Sync mime-filter action state + button indicator
-        if let Some(a) = self.lookup_action("set-mime-filter") {
-            if let Ok(a) = a.downcast::<gio::SimpleAction>() {
+        if let Some(a) = self.lookup_action("set-mime-filter")
+            && let Ok(a) = a.downcast::<gio::SimpleAction>() {
                 a.set_state(&filter_category.as_str().to_variant());
             }
-        }
         self.update_filter_button_indicator(filter_category);
 
         // Apply current zoom to the newly-selected tab's grid
@@ -337,14 +332,13 @@ impl WrenWindow {
             let imp = self.imp();
             let show_hidden = imp.show_hidden.get();
             let tabs = imp.tabs.borrow();
-            if let Some(tab) = tabs.get(idx) {
-                if let Some(model) = tab.dir_model.as_ref() {
+            if let Some(tab) = tabs.get(idx)
+                && let Some(model) = tab.dir_model.as_ref() {
                     model.set_filter("", show_hidden);
                     if tab.content_stack.visible_child_name().as_deref() == Some("no-results") {
                         tab.content_stack.set_visible_child_name("files");
                     }
                 }
-            }
         }
 
         // Refresh the banner so it reflects the newly-active tab's
@@ -369,7 +363,7 @@ impl WrenWindow {
         let full = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(false, |a| a.show_full_path_in_title());
+            .is_some_and(|a| a.show_full_path_in_title());
         if full {
             if let Some(path) = location.path() {
                 let s = path.to_string_lossy().into_owned();
@@ -431,11 +425,10 @@ impl WrenWindow {
         // network:///) point at a real URI via standard::target-uri.
         // Follow it so navigation enumerates the actual share, not the
         // discovery stub.
-        if matches!(file_obj.file_type(), gio::FileType::Shortcut) {
-            if let Some(uri) = file_obj.target_uri() {
+        if matches!(file_obj.file_type(), gio::FileType::Shortcut)
+            && let Some(uri) = file_obj.target_uri() {
                 return gio::File::for_uri(&uri);
             }
-        }
         file_obj.file().clone()
     }
 
@@ -728,7 +721,7 @@ impl WrenWindow {
                         let is_current = {
                             let tabs = window.imp().tabs.borrow();
                             tabs.get(tab_idx)
-                                .map_or(false, |t| t.load_gen.get() == load_gen)
+                                .is_some_and(|t| t.load_gen.get() == load_gen)
                         };
                         if !is_current {
                             return;
@@ -766,7 +759,7 @@ impl WrenWindow {
                         let is_current = {
                             let tabs = window.imp().tabs.borrow();
                             tabs.get(tab_idx)
-                                .map_or(false, |t| t.load_gen.get() == load_gen)
+                                .is_some_and(|t| t.load_gen.get() == load_gen)
                         };
                         if !is_current {
                             return;
@@ -862,7 +855,7 @@ impl WrenWindow {
                         {
                             let tabs = window.imp().tabs.borrow();
                             if let Some(tab) = tabs.get(tab_idx) {
-                                tab.error_page.set_description(Some(&e.message().to_string()));
+                                tab.error_page.set_description(Some(e.message()));
                             }
                         }
                         content_stack.set_visible_child_name("error");
@@ -928,7 +921,7 @@ impl WrenWindow {
                     if tab
                         .navigation
                         .current()
-                        .map_or(false, |c| c.equal(location))
+                        .is_some_and(|c| c.equal(location))
                     {
                         Some(idx)
                     } else {
@@ -1136,11 +1129,10 @@ impl WrenWindow {
             return;
         };
         let tabs = self.imp().tabs.borrow();
-        if let Some(tab) = tabs.get(idx) {
-            if let Some(model) = tab.dir_model.as_ref() {
+        if let Some(tab) = tabs.get(idx)
+            && let Some(model) = tab.dir_model.as_ref() {
                 model.set_sort(tab.sort_key, tab.sort_reversed);
             }
-        }
     }
 
     // ── Mime filter ──────────────────────────────────────────────────────────
@@ -1256,7 +1248,7 @@ impl WrenWindow {
         }
         let imp = self.imp();
         let mut list = imp.search_history.borrow_mut();
-        if list.first().map_or(false, |s| s == trimmed) {
+        if list.first().is_some_and(|s| s == trimmed) {
             return;
         }
         list.retain(|s| s != trimmed);
@@ -1273,7 +1265,7 @@ impl WrenWindow {
             return;
         }
         let entry = &*imp.search_entry;
-        let current = imp.search_history_index.borrow().clone();
+        let current = *imp.search_history_index.borrow();
 
         let new_index: Option<i32> = match (current, delta) {
             (None, -1) => {
@@ -1374,7 +1366,7 @@ impl WrenWindow {
                         let _ = load_fut.await;
                         let is_current = {
                             let tabs = window.imp().tabs.borrow();
-                            tabs.get(idx).map_or(false, |t| t.load_gen.get() == load_gen)
+                            tabs.get(idx).is_some_and(|t| t.load_gen.get() == load_gen)
                         };
                         if !is_current { return; }
                         window.update_status_bar();
@@ -1397,7 +1389,7 @@ impl WrenWindow {
                 let result = fut.await;
                 let is_current = {
                     let tabs = window.imp().tabs.borrow();
-                    tabs.get(idx).map_or(false, |t| t.load_gen.get() == load_gen)
+                    tabs.get(idx).is_some_and(|t| t.load_gen.get() == load_gen)
                 };
                 // Cancellation safety: a stale future (superseded by
                 // a newer keystroke or by navigation) must not paint
@@ -1548,7 +1540,7 @@ impl WrenWindow {
         // is rebuilt every right-click (see setup_context_menu) so
         // adding/removing templates while wren is open Just Works.
         let app = self.application().and_downcast::<WrenApplication>();
-        let show_ext = app.as_ref().map_or(true, |a| a.show_extensions());
+        let show_ext = app.as_ref().is_none_or(|a| a.show_extensions());
         let templates = templates::list_templates();
         if !templates.is_empty() {
             let templates_menu = gio::Menu::new();
@@ -1563,17 +1555,17 @@ impl WrenWindow {
             }
             file_section.append_submenu(Some("New Document"), &templates_menu);
         }
-        if app.as_ref().map_or(true, |a| a.show_duplicate()) {
+        if app.as_ref().is_none_or(|a| a.show_duplicate()) {
             file_section.append(Some("Duplicate"), Some("win.duplicate"));
         }
         file_section.append(Some("Rename"), Some("win.rename"));
-        if app.as_ref().map_or(true, |a| a.show_create_link()) {
+        if app.as_ref().is_none_or(|a| a.show_create_link()) {
             file_section.append(Some("Create Link"), Some("win.create-link"));
         }
-        if app.as_ref().map_or(true, |a| a.show_add_bookmark()) {
+        if app.as_ref().is_none_or(|a| a.show_add_bookmark()) {
             file_section.append(Some("Add to Bookmarks"), Some("win.add-bookmark"));
         }
-        if app.as_ref().map_or(true, |a| a.show_copy_location()) {
+        if app.as_ref().is_none_or(|a| a.show_copy_location()) {
             file_section.append(Some("Copy Location"), Some("win.copy-path"));
         }
         file_section.append(Some("Move to Trash"), Some("win.move-to-trash"));
@@ -1628,11 +1620,10 @@ impl WrenWindow {
             return;
         };
         let tabs = self.imp().tabs.borrow();
-        if let Some(tab) = tabs.get(idx) {
-            if let Some(model) = tab.dir_model.as_ref() {
+        if let Some(tab) = tabs.get(idx)
+            && let Some(model) = tab.dir_model.as_ref() {
                 model.selection.select_all();
             }
-        }
     }
 
     pub fn set_view_mode(&self, mode: &str) {
@@ -1848,11 +1839,10 @@ impl WrenWindow {
         let model = tab.dir_model.as_ref()?;
         let n = model.selection.n_items();
         for i in 0..n {
-            if let Some(obj) = model.selection.item(i).and_downcast::<FileObject>() {
-                if obj.file().equal(file) {
+            if let Some(obj) = model.selection.item(i).and_downcast::<FileObject>()
+                && obj.file().equal(file) {
                     return Some(i);
                 }
-            }
         }
         None
     }
@@ -1872,12 +1862,11 @@ impl WrenWindow {
         let n = model.selection.n_items();
         let mut found_pos: Option<u32> = None;
         for i in 0..n {
-            if let Some(obj) = model.selection.item(i).and_downcast::<FileObject>() {
-                if obj.file().equal(file) {
+            if let Some(obj) = model.selection.item(i).and_downcast::<FileObject>()
+                && obj.file().equal(file) {
                     found_pos = Some(i);
                     break;
                 }
-            }
         }
         if let Some(pos) = found_pos {
             model.selection.select_item(pos, true);
@@ -2197,9 +2186,7 @@ impl WrenWindow {
                     == gio::FileType::Directory
             })
             .or_else(|| {
-                let Some(idx) = self.current_tab_index() else {
-                    return None;
-                };
+                let idx = self.current_tab_index()?;
                 let tabs = self.imp().tabs.borrow();
                 tabs.get(idx).and_then(|t| t.navigation.current().cloned())
             });
@@ -2452,11 +2439,10 @@ impl WrenWindow {
             for (i, app) in recommended.iter().enumerate() {
                 let row = make_app_row(app);
                 recommended_list.append(&row);
-                if let Some(d) = &default {
-                    if app.id() == d.id() {
+                if let Some(d) = &default
+                    && app.id() == d.id() {
                         default_idx = Some(i as i32);
                     }
-                }
             }
         }
 
@@ -2573,11 +2559,10 @@ impl WrenWindow {
                 #[weak] set_default_check,
                 #[upgrade_or] (),
                 move |app: gio::AppInfo| {
-                    if set_default_check.is_sensitive() && set_default_check.is_active() {
-                        if let Err(e) = app.set_as_default_for_type(&content_type) {
+                    if set_default_check.is_sensitive() && set_default_check.is_active()
+                        && let Err(e) = app.set_as_default_for_type(&content_type) {
                             window.show_toast(&format!("Could not set default: {e}"));
                         }
-                    }
                     // Terminal apps (Terminal=true in the .desktop file) need
                     // to be run inside a terminal emulator. glib's built-in
                     // launcher only knows a hardcoded list of terminals
@@ -2731,11 +2716,10 @@ impl WrenWindow {
                                     let res = launcher
                                         .launch_future(Some(&window))
                                         .await;
-                                    if let Err(e) = res {
-                                        if !e.matches(gtk4::DialogError::Dismissed) {
+                                    if let Err(e) = res
+                                        && !e.matches(gtk4::DialogError::Dismissed) {
                                             window.show_toast(&format!("Cannot open: {e}"));
                                         }
-                                    }
                                 }
                                 Err(e) => {
                                     window.show_toast(&format!("Cannot open: {e}"));
@@ -2760,7 +2744,7 @@ impl WrenWindow {
         let flat = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(false, |a| a.settings_flat());
+            .is_some_and(|a| a.settings_flat());
 
         // In tabbed mode each section is its own PreferencesPage with an
         // icon, and AdwPreferencesDialog auto-renders the tab strip. In
@@ -3049,7 +3033,7 @@ impl WrenWindow {
         let initial_dup = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.show_duplicate());
+            .is_none_or(|a| a.show_duplicate());
         duplicate_row.set_active(initial_dup);
         duplicate_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3067,7 +3051,7 @@ impl WrenWindow {
         let initial_link = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.show_create_link());
+            .is_none_or(|a| a.show_create_link());
         create_link_row.set_active(initial_link);
         create_link_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3085,7 +3069,7 @@ impl WrenWindow {
         let initial_bm = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.show_add_bookmark());
+            .is_none_or(|a| a.show_add_bookmark());
         bookmark_row.set_active(initial_bm);
         bookmark_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3103,7 +3087,7 @@ impl WrenWindow {
         let initial_cl = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.show_copy_location());
+            .is_none_or(|a| a.show_copy_location());
         copy_loc_row.set_active(initial_cl);
         copy_loc_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3127,7 +3111,7 @@ impl WrenWindow {
         let initial_fp = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(false, |a| a.show_full_path_in_title());
+            .is_some_and(|a| a.show_full_path_in_title());
         full_path_row.set_active(initial_fp);
         full_path_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3182,7 +3166,7 @@ impl WrenWindow {
         let initial_ct = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.confirm_move_to_trash());
+            .is_none_or(|a| a.confirm_move_to_trash());
         confirm_trash_row.set_active(initial_ct);
         confirm_trash_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3206,7 +3190,7 @@ impl WrenWindow {
         let initial_ff = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.folders_first());
+            .is_none_or(|a| a.folders_first());
         folders_first_row.set_active(initial_ff);
         folders_first_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3353,11 +3337,10 @@ impl WrenWindow {
             #[weak(rename_to = window)]
             self,
             move |row| {
-                if let Some(app) = window.application().and_downcast::<WrenApplication>() {
-                    if app.set_recents_cap(row.value() as usize) {
+                if let Some(app) = window.application().and_downcast::<WrenApplication>()
+                    && app.set_recents_cap(row.value() as usize) {
                         window.imp().sidebar.reload_recents();
                     }
-                }
             }
         ));
         sidebar_group.add(&recents_row);
@@ -3369,7 +3352,7 @@ impl WrenWindow {
         let initial_bookmarks = self
             .application()
             .and_downcast::<WrenApplication>()
-            .map_or(true, |a| a.bookmarks_enabled());
+            .is_none_or(|a| a.bookmarks_enabled());
         bookmarks_row.set_active(initial_bookmarks);
         bookmarks_row.connect_active_notify(glib::clone!(
             #[weak(rename_to = window)]
@@ -3521,7 +3504,7 @@ impl WrenWindow {
             "Override the folder, view, sort, and zoom Ctrl+T uses",
         ));
 
-        let use_defaults = app.as_ref().map_or(false, |a| a.new_tab_use_defaults());
+        let use_defaults = app.as_ref().is_some_and(|a| a.new_tab_use_defaults());
 
         let use_row = adw::SwitchRow::new();
         use_row.set_title("Use defaults for new tabs");
@@ -3586,7 +3569,7 @@ impl WrenWindow {
         let asc_btn = gtk4::ToggleButton::with_label("Ascending");
         let desc_btn = gtk4::ToggleButton::with_label("Descending");
         desc_btn.set_group(Some(&asc_btn));
-        let initial_reversed = app.as_ref().map_or(false, |a| a.new_tab_default_sort_reversed());
+        let initial_reversed = app.as_ref().is_some_and(|a| a.new_tab_default_sort_reversed());
         if initial_reversed {
             desc_btn.set_active(true);
         } else {
@@ -3696,9 +3679,7 @@ impl WrenWindow {
             .find(|o| o.is_directory())
             .map(|o| o.file().clone())
             .or_else(|| {
-                let Some(idx) = self.current_tab_index() else {
-                    return None;
-                };
+                let idx = self.current_tab_index()?;
                 let tabs = self.imp().tabs.borrow();
                 tabs.get(idx).and_then(|t| t.navigation.current().cloned())
             });
@@ -4201,11 +4182,10 @@ impl WrenWindow {
             let mut bytes = 0u64;
             for i in 0..n_selected {
                 let pos = bitset.nth(i);
-                if let Some(obj) = model.selection.item(pos).and_downcast::<FileObject>() {
-                    if !obj.is_directory() {
+                if let Some(obj) = model.selection.item(pos).and_downcast::<FileObject>()
+                    && !obj.is_directory() {
                         bytes = bytes.saturating_add(obj.file_size());
                     }
-                }
             }
             let location = tab.navigation.current().cloned();
             (n_total, n_selected, bytes, tab.status_bar.clone(), location)
@@ -4314,7 +4294,7 @@ impl WrenWindow {
                 let is_current = {
                     let tabs = window.imp().tabs.borrow();
                     tabs.get(tab_idx)
-                        .map_or(false, |t| t.load_gen.get() == load_gen)
+                        .is_some_and(|t| t.load_gen.get() == load_gen)
                 };
                 if !is_current {
                     return;
@@ -4475,8 +4455,6 @@ impl WrenWindow {
             }
         }
     }
-
-    /// Ask the user how to resolve a name collision. Returns the resolution
 
     pub fn show_about(&self) {
         let dialog = adw::AboutDialog::builder()

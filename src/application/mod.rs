@@ -430,7 +430,7 @@ impl WrenApplication {
             return false;
         }
         let mut list = self.imp().recent_uris.borrow_mut();
-        if list.first().map_or(false, |u| u == uri) {
+        if list.first().is_some_and(|u| u == uri) {
             return false;
         }
         list.retain(|u| u != uri);
@@ -453,7 +453,7 @@ impl WrenApplication {
             return;
         }
         let mut list = self.imp().path_history.borrow_mut();
-        if list.first().map_or(false, |s| s == trimmed) {
+        if list.first().is_some_and(|s| s == trimmed) {
             return;
         }
         list.retain(|s| s != trimmed);

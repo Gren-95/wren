@@ -184,7 +184,7 @@ impl ObjectImpl for WrenBreadcrumbBar {
     }
 
     fn dispose(&self) {
-        self.obj().first_child().map(|child| child.unparent());
+        if let Some(child) = self.obj().first_child() { child.unparent() }
     }
 }
 
@@ -210,7 +210,7 @@ impl WrenBreadcrumbBar {
         }
 
         let entry = &*self.path_entry;
-        let current = self.history_index.borrow().clone();
+        let current = *self.history_index.borrow();
 
         let new_index: Option<i32> = match (current, delta) {
             (None, -1) => {

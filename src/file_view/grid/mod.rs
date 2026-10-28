@@ -67,12 +67,11 @@ fn make_cell_factory(
             let n = model.n_items();
             let mut this_pos: Option<u32> = None;
             for i in 0..n {
-                if let Some(obj) = model.item(i).and_downcast::<FileObject>() {
-                    if obj.file().equal(&this_file) {
+                if let Some(obj) = model.item(i).and_downcast::<FileObject>()
+                    && obj.file().equal(&this_file) {
                         this_pos = Some(i);
                         break;
                     }
-                }
             }
 
             // If the clicked cell is part of the current selection, drag the
@@ -229,7 +228,7 @@ impl WrenFileGrid {
             move |_, _, x, y| {
                 let on_item = gv
                     .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
-                    .map_or(false, |w| {
+                    .is_some_and(|w| {
                         let mut cur: Option<gtk4::Widget> = Some(w);
                         while let Some(widget) = cur {
                             if widget.is::<WrenFileCell>() { return true; }
@@ -238,11 +237,10 @@ impl WrenFileGrid {
                         }
                         false
                     });
-                if !on_item {
-                    if let Some(model) = gv.model().and_downcast::<gtk4::MultiSelection>() {
+                if !on_item
+                    && let Some(model) = gv.model().and_downcast::<gtk4::MultiSelection>() {
                         model.unselect_all();
                     }
-                }
             }
         ));
         imp.grid_view.add_controller(gesture);
@@ -392,25 +390,23 @@ impl WrenFileGrid {
             let mut w: Option<gtk4::Widget> = Some(picked);
             while let Some(widget) = w {
                 if let Ok(cell) = widget.clone().downcast::<crate::file_view::cell::WrenFileCell>() {
-                    if let Some(file_obj) = cell.bound_file_object() {
-                        if let Some(model) = imp
+                    if let Some(file_obj) = cell.bound_file_object()
+                        && let Some(model) = imp
                             .grid_view
                             .model()
                             .and_then(|m| m.downcast::<gtk4::MultiSelection>().ok())
                         {
                             let n = model.n_items();
                             for i in 0..n {
-                                if let Some(o) = model.item(i).and_downcast::<crate::model::FileObject>() {
-                                    if o.file().equal(file_obj.file()) {
+                                if let Some(o) = model.item(i).and_downcast::<crate::model::FileObject>()
+                                    && o.file().equal(file_obj.file()) {
                                         if !model.selection().contains(i) {
                                             model.select_item(i, true);
                                         }
                                         break;
                                     }
-                                }
                             }
                         }
-                    }
                     break;
                 }
                 w = widget.parent();
@@ -484,13 +480,11 @@ impl WrenFileGrid {
         let imp = imp::WrenFileGrid::from_obj(self);
         let map = imp.bound_cells.borrow();
         for weak in map.values() {
-            if let Some(cell) = weak.upgrade() {
-                if let Some(obj) = cell.bound_file_object() {
-                    if obj.file().equal(target) {
+            if let Some(cell) = weak.upgrade()
+                && let Some(obj) = cell.bound_file_object()
+                    && obj.file().equal(target) {
                         return Some(cell);
                     }
-                }
-            }
         }
         None
     }
@@ -634,7 +628,7 @@ mod imp {
             if let Some(popover) = self.context_popover.take() {
                 popover.unparent();
             }
-            self.obj().first_child().map(|child| child.unparent());
+            if let Some(child) = self.obj().first_child() { child.unparent() }
         }
     }
 

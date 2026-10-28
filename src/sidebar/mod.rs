@@ -5,6 +5,9 @@ use glib::Object;
 use gtk4::gdk;
 use gtk4::prelude::*;
 
+/// (label, icon name, URI resolver) for a static sidebar place.
+type PlaceDef = (&'static str, &'static str, fn() -> String);
+
 glib::wrapper! {
     pub struct WrenSidebar(ObjectSubclass<imp::WrenSidebar>)
         @extends gtk4::Widget,
@@ -40,7 +43,7 @@ impl WrenSidebar {
 
         // ── Static places ────────────────────────────────────────────────────
 
-        let places: &[(&str, &str, fn() -> String)] = &[
+        let places: &[PlaceDef] = &[
             ("Home", "user-home-symbolic", || {
                 gio::File::for_path(glib::home_dir()).uri().to_string()
             }),
@@ -89,7 +92,7 @@ impl WrenSidebar {
 
         let bookmarks_enabled = gio::Application::default()
             .and_downcast::<crate::application::WrenApplication>()
-            .map_or(true, |a| a.bookmarks_enabled());
+            .is_none_or(|a| a.bookmarks_enabled());
         let bookmarks = if bookmarks_enabled {
             read_gtk_bookmarks()
         } else {
@@ -150,11 +153,8 @@ impl WrenSidebar {
 
         // Remove everything after n_static_rows (bookmarks + old devices)
         let n_static = imp.n_static_rows.get();
-        loop {
-            match list.row_at_index(n_static) {
-                Some(row) => list.remove(&row),
-                None => break,
-            }
+        while let Some(row) = list.row_at_index(n_static) {
+            list.remove(&row);
         }
 
         // Trim place_uris back to static entries
@@ -174,11 +174,9 @@ impl WrenSidebar {
         if let Some(win) = self
             .root()
             .and_downcast::<crate::window::WrenWindow>()
-        {
-            if let Some(loc) = win.current_location() {
+            && let Some(loc) = win.current_location() {
                 self.set_location(&loc);
             }
-        }
     }
 
     fn append_recents_section(&self) {
@@ -221,7 +219,7 @@ impl WrenSidebar {
         let list = &imp.list_box;
         let bookmarks_enabled = gio::Application::default()
             .and_downcast::<crate::application::WrenApplication>()
-            .map_or(true, |a| a.bookmarks_enabled());
+            .is_none_or(|a| a.bookmarks_enabled());
         if !bookmarks_enabled {
             return;
         }
@@ -502,11 +500,10 @@ impl WrenSidebar {
                 if mounted_volumes.contains(&id) {
                     return false;
                 }
-                if let Some(root) = v.activation_root() {
-                    if mounted_roots.contains(root.uri().as_str()) {
+                if let Some(root) = v.activation_root()
+                    && mounted_roots.contains(root.uri().as_str()) {
                         return false;
                     }
-                }
                 if let Some(d) = v.drive() {
                     use glib::translate::ToGlibPtr;
                     let p: *mut gio::ffi::GDrive = d.to_glib_none().0;
@@ -821,12 +818,11 @@ impl WrenSidebar {
             // to retry rather than a real failure. Try once more before
             // surfacing it as an error.
             let mut result = run_unmount(&mount, prefer_eject).await;
-            if let Err(ref e) = result {
-                if e.message().contains("Cache invalid, retry") {
+            if let Err(ref e) = result
+                && e.message().contains("Cache invalid, retry") {
                     glib::timeout_future(std::time::Duration::from_millis(150)).await;
                     result = run_unmount(&mount, prefer_eject).await;
                 }
-            }
             if let Some(win) = win {
                 match result {
                     Ok(()) => {
@@ -885,7 +881,7 @@ impl WrenSidebar {
                 .await
             {
                 Ok(()) => {
-                    if let (Some(ref win), Some(mount)) = (win.as_ref(), volume.get_mount()) {
+                    if let (Some(win), Some(mount)) = (win.as_ref(), volume.get_mount()) {
                         win.navigate_to(mount.root());
                     }
                 }
