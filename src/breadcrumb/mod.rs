@@ -245,14 +245,13 @@ impl WrenBreadcrumbBar {
                     .root()
                     .and_then(|r| r.downcast::<crate::window::WrenWindow>().ok());
 
-                if let Some(ref win) = win {
-                    if let Some(app) = win
+                if let Some(ref win) = win
+                    && let Some(app) = win
                         .application()
                         .and_downcast::<crate::application::WrenApplication>()
                     {
                         app.push_path_history(&typed_text);
                     }
-                }
                 bar.imp().history_index.replace(None);
 
                 match info {
@@ -270,11 +269,10 @@ impl WrenBreadcrumbBar {
                             launcher.launch_future(parent_window.as_ref()).await;
                         bar.imp().path_entry.set_text("");
                         bar.leave_edit_mode();
-                        if let (Err(e), Some(win)) = (launch_res, win) {
-                            if !e.matches(gtk4::DialogError::Dismissed) {
+                        if let (Err(e), Some(win)) = (launch_res, win)
+                            && !e.matches(gtk4::DialogError::Dismissed) {
                                 win.show_toast(&format!("Cannot open: {e}"));
                             }
-                        }
                     }
                     Err(e) => {
                         if let Some(win) = win {

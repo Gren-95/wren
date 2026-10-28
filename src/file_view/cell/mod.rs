@@ -38,20 +38,20 @@ const PIXBUF_CACHE_MAX: usize = 512;
 
 thread_local! {
     static PIXBUF_CACHE: std::cell::RefCell<VecDeque<(PathBuf, gdk_pixbuf::Pixbuf)>> =
-        std::cell::RefCell::new(VecDeque::new());
+        const { std::cell::RefCell::new(VecDeque::new()) };
 
     static TEXTURE_CACHE: std::cell::RefCell<VecDeque<(PathBuf, i32, gtk4::gdk::Texture)>> =
-        std::cell::RefCell::new(VecDeque::new());
+        const { std::cell::RefCell::new(VecDeque::new()) };
 
     // Runtime-configurable cap for TEXTURE_CACHE. Settings dialog writes
     // here via set_thumbnail_cache_cap; default matches THUMB_CACHE_DEFAULT.
     static TEXTURE_CACHE_CAP: std::cell::Cell<usize> =
-        std::cell::Cell::new(crate::application::THUMB_CACHE_DEFAULT);
+        const { std::cell::Cell::new(crate::application::THUMB_CACHE_DEFAULT) };
 
     // Tri-state thumbnail policy. Read on every cell bind; written from
     // app startup and the Settings dialog.
     static THUMB_POLICY: std::cell::Cell<u8> =
-        std::cell::Cell::new(crate::application::THUMB_POLICY_ALWAYS);
+        const { std::cell::Cell::new(crate::application::THUMB_POLICY_ALWAYS) };
 }
 
 /// Update the thumbnail policy. Called at startup and from the Settings
@@ -194,14 +194,12 @@ impl WrenFileCell {
         // and icon alike), so gdk_paintable_snapshot is called with (px, px).
         imp.icon.set_pixel_size(px);
 
-        if thumbnails_allowed_for(file_obj) {
-            if let Some(thumb_path) = file_obj.thumbnail_path() {
-                if let Some(texture) = cached_texture(&thumb_path, px) {
+        if thumbnails_allowed_for(file_obj)
+            && let Some(thumb_path) = file_obj.thumbnail_path()
+                && let Some(texture) = cached_texture(&thumb_path, px) {
                     imp.icon.set_paintable(Some(&texture));
                     return;
                 }
-            }
-        }
 
         if let Some(icon) = file_obj.icon() {
             imp.icon.set_from_gicon(&icon);

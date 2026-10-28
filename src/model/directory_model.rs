@@ -179,11 +179,10 @@ impl DirectoryModel {
                 // Search-text filtering moved into start_search's recursive
                 // walk; the store only ever holds entries that already
                 // match the query, so no display-time check needed here.
-                if !matches!(state.category, MimeCategory::All) && !file_obj.is_directory() {
-                    if !state.category.matches(&file_obj.content_type()) {
+                if !matches!(state.category, MimeCategory::All) && !file_obj.is_directory()
+                    && !state.category.matches(&file_obj.content_type()) {
                         return false;
                     }
-                }
                 true
             }
         });
@@ -491,11 +490,10 @@ mod tests {
         info.set_icon(&gio::ThemedIcon::new("text-x-generic"));
         info.set_is_hidden(name.starts_with('.'));
         info.set_is_symlink(false);
-        if modified_unix > 0 {
-            if let Ok(dt) = glib::DateTime::from_unix_local(modified_unix) {
+        if modified_unix > 0
+            && let Ok(dt) = glib::DateTime::from_unix_local(modified_unix) {
                 info.set_modification_date_time(&dt);
             }
-        }
         info
     }
 

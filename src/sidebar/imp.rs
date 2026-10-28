@@ -53,7 +53,7 @@ impl ObjectImpl for WrenSidebar {
         for id in self.volume_monitor_handlers.borrow_mut().drain(..) {
             monitor.disconnect(id);
         }
-        self.obj().first_child().map(|child| child.unparent());
+        if let Some(child) = self.obj().first_child() { child.unparent() }
     }
 }
 

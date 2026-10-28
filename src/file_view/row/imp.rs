@@ -56,7 +56,7 @@ impl ObjectSubclass for WrenFileRow {
 
 impl ObjectImpl for WrenFileRow {
     fn dispose(&self) {
-        self.obj().first_child().map(|child| child.unparent());
+        if let Some(child) = self.obj().first_child() { child.unparent() }
     }
 }
 

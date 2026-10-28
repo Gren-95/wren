@@ -828,7 +828,7 @@ impl ObjectImpl for WrenWindow {
                 let bar = imp.breadcrumb_bar.upcast_ref::<gtk4::Widget>();
                 let in_bar = obj
                     .pick(x, y, gtk4::PickFlags::DEFAULT)
-                    .map_or(false, |w| w == *bar || w.is_ancestor(bar));
+                    .is_some_and(|w| w == *bar || w.is_ancestor(bar));
                 if !in_bar {
                     imp.breadcrumb_bar.leave_edit_mode();
                 }

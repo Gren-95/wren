@@ -62,12 +62,11 @@ fn make_row_factory(
             let n = model.n_items();
             let mut this_pos: Option<u32> = None;
             for i in 0..n {
-                if let Some(obj) = model.item(i).and_downcast::<FileObject>() {
-                    if obj.file().equal(&this_file) {
+                if let Some(obj) = model.item(i).and_downcast::<FileObject>()
+                    && obj.file().equal(&this_file) {
                         this_pos = Some(i);
                         break;
                     }
-                }
             }
 
             let files: Vec<gio::File> = match this_pos {
@@ -356,25 +355,23 @@ impl WrenFileList {
             let mut w: Option<gtk4::Widget> = Some(picked);
             while let Some(widget) = w {
                 if let Ok(row) = widget.clone().downcast::<WrenFileRow>() {
-                    if let Some(file_obj) = row.bound_file_object() {
-                        if let Some(model) = imp
+                    if let Some(file_obj) = row.bound_file_object()
+                        && let Some(model) = imp
                             .list_view
                             .model()
                             .and_then(|m| m.downcast::<gtk4::MultiSelection>().ok())
                         {
                             let n = model.n_items();
                             for i in 0..n {
-                                if let Some(o) = model.item(i).and_downcast::<FileObject>() {
-                                    if o.file().equal(file_obj.file()) {
+                                if let Some(o) = model.item(i).and_downcast::<FileObject>()
+                                    && o.file().equal(file_obj.file()) {
                                         if !model.selection().contains(i) {
                                             model.select_item(i, true);
                                         }
                                         break;
                                     }
-                                }
                             }
                         }
-                    }
                     break;
                 }
                 w = widget.parent();
@@ -417,7 +414,7 @@ impl WrenFileList {
             move |_, _, x, y| {
                 let on_item = lv
                     .pick(x, y, gtk4::PickFlags::NON_TARGETABLE)
-                    .map_or(false, |w| {
+                    .is_some_and(|w| {
                         let mut cur: Option<gtk4::Widget> = Some(w);
                         while let Some(widget) = cur {
                             if widget.is::<WrenFileRow>() {
@@ -430,11 +427,10 @@ impl WrenFileList {
                         }
                         false
                     });
-                if !on_item {
-                    if let Some(model) = lv.model().and_downcast::<gtk4::MultiSelection>() {
+                if !on_item
+                    && let Some(model) = lv.model().and_downcast::<gtk4::MultiSelection>() {
                         model.unselect_all();
                     }
-                }
             }
         ));
         imp.list_view.add_controller(gesture);
@@ -473,13 +469,11 @@ impl WrenFileList {
         let imp = imp::WrenFileList::from_obj(self);
         let map = imp.bound_rows.borrow();
         for weak in map.values() {
-            if let Some(row) = weak.upgrade() {
-                if let Some(obj) = row.bound_file_object() {
-                    if obj.file().equal(target) {
+            if let Some(row) = weak.upgrade()
+                && let Some(obj) = row.bound_file_object()
+                    && obj.file().equal(target) {
                         return Some(row);
                     }
-                }
-            }
         }
         None
     }
@@ -800,7 +794,7 @@ mod imp {
             if let Some(popover) = self.context_popover.take() {
                 popover.unparent();
             }
-            self.obj().first_child().map(|child| child.unparent());
+            if let Some(child) = self.obj().first_child() { child.unparent() }
         }
     }
 

@@ -40,7 +40,7 @@ impl ObjectSubclass for WrenFileCell {
 
 impl ObjectImpl for WrenFileCell {
     fn dispose(&self) {
-        self.obj().first_child().map(|child| child.unparent());
+        if let Some(child) = self.obj().first_child() { child.unparent() }
     }
 }
 

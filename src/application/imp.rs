@@ -154,12 +154,10 @@ impl WrenApplication {
             if let Ok(v) = kf.boolean("Sort", "reversed") {
                 self.sort_reversed.set(v);
             }
-            if let Ok(v) = kf.integer("Window", "width") {
-                if v > 0 { self.window_width.set(v); }
-            }
-            if let Ok(v) = kf.integer("Window", "height") {
-                if v > 0 { self.window_height.set(v); }
-            }
+            if let Ok(v) = kf.integer("Window", "width")
+                && v > 0 { self.window_width.set(v); }
+            if let Ok(v) = kf.integer("Window", "height")
+                && v > 0 { self.window_height.set(v); }
             if let Ok(v) = kf.boolean("Window", "maximized") {
                 self.window_maximized.set(v);
             }

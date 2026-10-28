@@ -85,10 +85,10 @@ const FOLDER_COUNT_CACHE_MAX: usize = 500;
 
 thread_local! {
     static FOLDER_COUNT_CACHE: RefCell<VecDeque<(String, bool, u32)>> =
-        RefCell::new(VecDeque::new());
+        const { RefCell::new(VecDeque::new()) };
 
     static FOLDER_COUNT_POLICY: std::cell::Cell<FolderCountPolicy> =
-        std::cell::Cell::new(FolderCountPolicy::Always);
+        const { std::cell::Cell::new(FolderCountPolicy::Always) };
 }
 
 pub fn set_folder_count_policy(v: &str) {
@@ -372,8 +372,7 @@ fn row_still_bound_to(row: &WrenFileRow, uri: &str) -> bool {
     row.imp()
         .pending_count_uri
         .borrow()
-        .as_deref()
-        .map_or(false, |u| u == uri)
+        .as_deref() == Some(uri)
 }
 
 /// Format a unix mode (permission bits + type) as `rwxr-xr-x`.
